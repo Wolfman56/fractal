@@ -1,0 +1,16 @@
+<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+  <title>Fractal Landscape Icon</title>
+  <style>
+    path {
+      fill: none;
+      stroke: #007bff; /* A nice blue for light mode */
+      stroke-width: 2;
+      stroke-linejoin: round;
+      stroke-linecap: round;
+    }
+    @media (prefers-color-scheme: dark) {
+      path { stroke: #58a6ff; } /* A lighter blue for dark mode */
+    }
+  </style>
+  <path d="M2 20 L8 12 L14 22 L20 10 L26 18 L30 14"/>
+</svg>

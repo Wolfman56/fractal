@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Geometry Stitching Test</title>
+    <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+    <style>
+        body { font-family: monospace; background-color: #1e1e1e; color: #d4d4d4; padding: 20px; }
+        h1 { color: #569cd6; }
+        pre { background-color: #252526; padding: 15px; border-radius: 5px; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+    <h1>Tile Geometry Stitching Unit Test</h1>
+    <p>Open the developer console (F12) to see the output of the test.</p>
+    <p>This test generates geometry for a 4x4 high-resolution tile surrounded by low-resolution neighbors and logs the generated indices.</p>
+    <div id="output"></div>
+
+    <script type="module">
+        import { createTileGeometry } from '../js/geometry.js';
+
+        /**
+         * Runs a series of validation checks on the generated geometry.
+         * @param {number[]} indices - The generated triangle indices.
+         * @param {number[]} positions - The generated vertex positions [x,y,z, x,y,z, ...].
+         * @param {number} gridSize - The size of the grid.
+         */
+        function validateGeometry(indices, positions, gridSize) {
+            console.log("%c--- Validating Geometry ---", "color: #569cd6; font-weight: bold;");
+            let hasErrors = false;
+            // The area of a single quad in normalized coordinates (which range from -1 to 1, so a span of 2).
+            const baseQuadArea = (2 / (gridSize - 1)) * (2 / (gridSize - 1));
+
+            for (let i = 0; i < indices.length; i += 3) {
+                const iA = indices[i];
+                const iB = indices[i + 1];
+                const iC = indices[i + 2];
+
+                const vA = { x: positions[iA * 3], z: positions[iA * 3 + 2] };
+                const vB = { x: positions[iB * 3], z: positions[iB * 3 + 2] };
+                const vC = { x: positions[iC * 3], z: positions[iC * 3 + 2] };
+
+                // Shoelace formula for signed 2D area. The sign indicates winding order.
+                const area = 0.5 * (vA.x * (vB.z - vC.z) + vB.x * (vC.z - vA.z) + vC.x * (vA.z - vB.z));
+                
+                const triangleIndex = i / 3;
+                const triangleIndices = `(${iA}, ${iB}, ${iC})`;
+
+                if (Math.abs(area) < 1e-9) {
+                    console.error(`Validation Error: Degenerate triangle #${triangleIndex} ${triangleIndices} with area ~0.`);
+                    hasErrors = true;
+                } else if (area < 0) {
+                    console.error(`Validation Error: Incorrect winding order (CW) for triangle #${triangleIndex} ${triangleIndices}. Area: ${area.toFixed(5)}`);
+                    hasErrors = true;
+                } else if (area > baseQuadArea * 2.1) { // A fan triangle can be larger than a standard quad. Use a small tolerance.
+                     const maxArea = baseQuadArea * 2;
+                     console.error(`Validation Error: Stretched triangle #${triangleIndex} ${triangleIndices}. Area: ${area.toFixed(5)}. Expected max ~${maxArea.toFixed(5)}.`);
+                     hasErrors = true;
+                }
+            }
+
+            if (!hasErrors) {
+                console.log("%cGeometry validation passed successfully.", "color: #34c734;");
+            } else {
+                console.error("Geometry validation FAILED. See errors above.");
+            }
+        }
+
+        function runTest() {
+            console.log("--- Running Geometry Stitching Test ---");
+
+            const params = {
+                gridSize: 4,
+                heightMultiplier: 1.0,
+            };
+
+            // A simple flat plane for the heightmap
+            const heights = new Float32Array(params.gridSize * params.gridSize).fill(1.0);
+
+            // Simulate a high-res tile (LOD 0) surrounded by low-res tiles (LOD 1)
+            const neighborLODs = {
+                top: 1,
+                bottom: 1,
+                left: 1,
+                right: 1,
+            };
+            const tileLOD = 0;
+
+            const { indices, positions } = createTileGeometry(heights, params, neighborLODs, tileLOD);
+
+            console.log(`Generated ${indices.length} indices for a ${params.gridSize}x${params.gridSize} grid.`);
+            console.log("Expected number of triangles:", (params.gridSize - 1) * (params.gridSize - 1) * 2);
+            console.log("Actual number of triangles:", indices.length / 3);
+            console.log("Indices:", indices);
+            
+            validateGeometry(indices, positions, params.gridSize);
+
+            document.getElementById('output').innerHTML = `<h1>Test Complete</h1><p>Check the console for results.</p><pre>${JSON.stringify(indices, null, 2)}</pre>`;
+        }
+
+        runTest();
+    </script>
+</body>
+</html>

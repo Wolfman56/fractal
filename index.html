@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Ken Musgrave Fractal Landscape Renderer</title>
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <button id="drawer-toggle">☰</button>
+    <div id="controls" class="drawer">
+        <h3 style="text-align: center; margin-top: 0;">Controls</h3>
+        <label>
+            <span>Render Mode</span>
+            <select id="shader-strategy-select" style="width: 60%;"></select>
+        </label>
+        <label>
+            <span>Confirm Overwrites</span>
+            <input type="checkbox" id="confirm-overwrite" checked title="If checked, you will be asked for confirmation before a parameter change overwrites an eroded terrain.">
+        </label>
+        <hr>
+        <label><span>Grid Size (2^N)</span><input type="range" id="gridSize" min="1" max="10" step="1" value="2"><span id="gridSize-value"> (2^2)</span></label>
+        <label><span>Octaves</span><input type="range" id="octaves" min="1" max="10" value="8"><span id="octaves-value">8</span></label>
+        <label><span>Persistence</span><input type="range" id="persistence" min="0.1" max="1" step="0.05" value="0.5"><span id="persistence-value">0.5</span></label>
+        <label><span>Lacunarity</span><input type="range" id="lacunarity" min="1" max="4" step="0.1" value="2"><span id="lacunarity-value">2</span></label>
+        <label><span>Cycles</span><input type="range" id="cycles" min="1" max="8" step="0.1" value="1"><span id="cycles-value">1</span></label>
+        <label><span>Seed</span><input type="range" id="seed" min="0" max="10000" value="42"><span id="seed-value">42</span></label>
+        <label><span>Height Multiplier</span><input type="range" id="heightMultiplier" min="0.1" max="5" step="0.1" value="0.5"><span id="heightMultiplier-value">0.5</span></label>
+        <label><span>Hurst</span><input type="range" id="hurst" min="0.1" max="2" step="0.1" value="0.6"><span id="hurst-value">0.6</span></label>
+        <label><span>Erosion Amount</span><input type="range" id="erosion-iterations" min="1" max="64" value="10"><span id="erosion-iterations-value">10</span></label>
+        <label><span>Erosion Rate</span><input type="range" id="erosion-rate" min="0.001" max="0.1" step="0.001" value="0.01"><span id="erosion-rate-value">0.01</span></label>
+    </div>
+    <main class="app-container">
+        <canvas id="canvas"></canvas>
+        <div id="action-bar">
+            <button id="regenerate">Regenerate</button>
+            <button id="erode-terrain">Erode</button>
+            <button id="animate-erosion">Animate</button>
+            <button id="snapshot-button">Snapshot</button>
+            <button id="reset-view">Reset View</button>
+        </div>
+    </main>
+
+    <script src="js/controller.js" type="module" defer></script>
+</body>
+</html>

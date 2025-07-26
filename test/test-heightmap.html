@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+    IMPORTANT: To run this file, you must serve it from a local web server.
+    This test page loads the main fractal-landscape.js script but without
+    the interactive controls, causing the script to use default parameters.
+
+    To start a simple server:
+    1. Open a terminal in this directory.
+    2. Run the command: python3 -m http.server
+    3. Open http://localhost:8000/test-heightmap.html in your browser.
+-->
+<head>
+    <meta charset="UTF-8">
+    <title>Fractal Landscape Test</title>
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <main class="app-container">
+        <canvas id="canvas" width="800" height="600"></canvas>
+        <div id="action-bar">
+            <label style="display: inline-flex; vertical-align: middle;"><span>Erosion Iterations</span><input type="range" id="erosion-iterations" min="1" max="100" value="32"><span id="erosion-iterations-value">32</span></label>
+            <button id="erode-terrain">Erode</button>
+            <button id="snapshot-button">Snapshot</button>
+        </div>
+    </main>
+    <script src="../js/fractal-landscape.js" type="module" defer></script>
+</body>
+</html>
