@@ -15,6 +15,7 @@ export class BaseModel {
         this.computeMinMaxBuffer = null;
         this.computeOutputBuffer = null;
         this.computeStagingBuffer = null;
+        this.computeMinMaxStagingBuffer = null;
         this.erosionParamsBuffer = null;
         this.heightmapTextureA = null;
         this.heightmapTextureB = null;
@@ -34,14 +35,15 @@ export class BaseModel {
         this.gridSize = gridSize;
 
         [this.computeUniformBuffer, this.computeMinMaxBuffer, this.erosionParamsBuffer,
-         this.computeOutputBuffer, this.computeStagingBuffer, this.heightmapTextureA,
+         this.computeOutputBuffer, this.computeStagingBuffer, this.computeMinMaxStagingBuffer, this.heightmapTextureA,
          this.heightmapTextureB].forEach(r => r?.destroy());
 
         this.computeUniformBuffer = this.device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-        this.computeMinMaxBuffer = this.device.createBuffer({ size: 8, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+        this.computeMinMaxBuffer = this.device.createBuffer({ size: 8, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
         this.erosionParamsBuffer = this.device.createBuffer({ size: 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         this.computeOutputBuffer = this.device.createBuffer({ size: gridSize * gridSize * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
         this.computeStagingBuffer = this.device.createBuffer({ size: this.computeOutputBuffer.size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+        this.computeMinMaxStagingBuffer = this.device.createBuffer({ size: 8, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
 
         const textureDescriptor = {
             size: [gridSize, gridSize],
@@ -85,7 +87,26 @@ export class BaseModel {
         this.shaderStrategy.prepareUniforms(uniformArrayBuffer, params, tileParams);
 
         this.device.queue.writeBuffer(this.computeUniformBuffer, 0, uniformArrayBuffer);
-        this.device.queue.writeBuffer(this.computeMinMaxBuffer, 0, new Int32Array([0x7FFFFFFF, -0x7FFFFFFF]));
+
+        // If the strategy has a normalization pipeline, manage the global min/max.
+        if (this.shaderStrategy.normalizePipeline) {
+            // The shader uses i32 atomics on floats scaled by a factor. We replicate that.
+            const INT_SCALE_FACTOR = 10000.0;
+            const I32_MAX = 0x7FFFFFFF;
+            const I32_MIN = -0x7FFFFFFF; // Matching original implementation's max value
+
+            const initialMin = this.shaderStrategy.globalMin === Infinity
+                ? I32_MAX
+                : Math.floor(this.shaderStrategy.globalMin * INT_SCALE_FACTOR);
+            const initialMax = this.shaderStrategy.globalMax === -Infinity
+                ? I32_MIN
+                : Math.floor(this.shaderStrategy.globalMax * INT_SCALE_FACTOR);
+
+            this.device.queue.writeBuffer(this.computeMinMaxBuffer, 0, new Int32Array([initialMin, initialMax]));
+        } else {
+            // For strategies like TiledLOD that don't normalize on GPU, reset to default.
+            this.device.queue.writeBuffer(this.computeMinMaxBuffer, 0, new Int32Array([0x7FFFFFFF, -0x7FFFFFFF]));
+        }
 
         const encoder = this.device.createCommandEncoder();
         let pass = encoder.beginComputePass();
@@ -100,12 +121,35 @@ export class BaseModel {
             pass.setBindGroup(0, this.computeBindGroup);
             pass.dispatchWorkgroups(Math.ceil(this.gridSize / 8), Math.ceil(this.gridSize / 8));
             pass.end();
+
+            // Read back the updated min/max values to update our JS-side state.
+            encoder.copyBufferToBuffer(this.computeMinMaxBuffer, 0, this.computeMinMaxStagingBuffer, 0, 8);
         }
 
         encoder.copyBufferToBuffer(this.computeOutputBuffer, 0, this.computeStagingBuffer, 0, this.computeOutputBuffer.size);
         this.device.queue.submit([encoder.finish()]);
 
-        await withTimeout(this.computeStagingBuffer.mapAsync(GPUMapMode.READ), 10000);
+        // Asynchronously wait for buffer mappings
+        const mapPromises = [withTimeout(this.computeStagingBuffer.mapAsync(GPUMapMode.READ), 10000)];
+        if (this.shaderStrategy.normalizePipeline) {
+            mapPromises.push(withTimeout(this.computeMinMaxStagingBuffer.mapAsync(GPUMapMode.READ), 1000));
+        }
+        await Promise.all(mapPromises);
+
+        // If we ran normalization, process the min/max results
+        if (this.shaderStrategy.normalizePipeline) {
+            const INT_SCALE_FACTOR = 10000.0;
+            const minMaxResult = new Int32Array(this.computeMinMaxStagingBuffer.getMappedRange());
+            // The buffer contains [min, max] as scaled integers.
+            const newMin = minMaxResult[0] / INT_SCALE_FACTOR;
+            const newMax = minMaxResult[1] / INT_SCALE_FACTOR;
+            this.computeMinMaxStagingBuffer.unmap();
+
+            // Update the strategy's state for the next run.
+            this.shaderStrategy.globalMin = newMin;
+            this.shaderStrategy.globalMax = newMax;
+        }
+
         const heights = new Float32Array(this.computeStagingBuffer.getMappedRange()).slice();
         this.computeStagingBuffer.unmap();
         
@@ -143,13 +187,16 @@ export class BaseModel {
         return erodedHeights;
     }
 
-    async update(params, view) {
+    async update(params, view, needsNormalizationReset = false) {
         throw new Error("Update method must be implemented by subclasses.");
     }
 }
 
 export class UntiledHeightmapModel extends BaseModel {
-    async update(params, view) {
+    async update(params, view, needsNormalizationReset = false) {
+        if (needsNormalizationReset) {
+            this.shaderStrategy.resetNormalization();
+        }
         view.setTiles([{x: 0, z: 0, lod: 0}]);
         const heights = await this.generateTileData(params, { origin: {x:0, y:0}, lod: 0 });
         if (heights) {
@@ -164,7 +211,7 @@ export class TiledLODModel extends BaseModel {
         this.validatedGridSize = -1;
     }
 
-    async update(params, view) {
+    async update(params, view, needsNormalizationReset = false) {
         const tileCoords = [];
         for (let x = -1; x <= 1; x++) {
             for (let z = -1; z <= 1; z++) {

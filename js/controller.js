@@ -115,31 +115,47 @@ class Controller {
     }
 
     async updateTerrain() {
-        if (this.isUpdating) return;
+        if (this.isUpdating) {
+            this.wantsUpdate = true; // Queue the update if one is already in progress
+            return;
+        }
         this.isUpdating = true;
 
-        const confirmOverwrite = document.getElementById('confirm-overwrite')?.checked ?? true;
-        if (this.currentModel.erosionFrameCounter > 0 && confirmOverwrite) {
-            if (!window.confirm("Changing these parameters will discard the current erosion. Are you sure you want to continue?")) {
-                this.isUpdating = false; // Release the lock
-                this.wantsUpdate = false; // Cancel the pending update
-                return; // Abort the update
-            }
-        }
-
-        const params = this.getParamsFromUI();
-        const currentGridSize = this.currentModel.gridSize;
-
-        if (params.gridSize !== currentGridSize) {
-            console.log(`Grid size changed to ${params.gridSize}. Recreating resources...`);
-            this.view.recreateRenderResources();
-            for (const model of Object.values(this.models)) {
-                model.recreateResources(params.gridSize, this.erosionPipeline);
-            }
-        }
-
         try {
-            await this.currentModel.update(params, this.view);
+            const confirmOverwrite = document.getElementById('confirm-overwrite')?.checked ?? true;
+            if (this.currentModel.erosionFrameCounter > 0 && confirmOverwrite) {
+                if (!window.confirm("Changing these parameters will discard the current erosion. Are you sure you want to continue?")) {
+                    this.isUpdating = false;
+                    this.wantsUpdate = false;
+                    return;
+                }
+            }
+
+            const params = this.getParamsFromUI();
+            const currentGridSize = this.currentModel.gridSize;
+            let needsNormalizationReset = false;
+
+            if (params.gridSize !== currentGridSize) {
+                console.log(`Grid size changed to ${params.gridSize}. Recreating resources...`);
+                needsNormalizationReset = true; // Grid size change forces a reset.
+                this.view.recreateRenderResources();
+                for (const model of Object.values(this.models)) {
+                    model.recreateResources(params.gridSize, this.erosionPipeline);
+                    // Explicitly reset strategy state when recreating resources
+                    model.shaderStrategy.resetNormalization();
+                }
+            }
+
+            // Check if other fundamental parameters have changed.
+            const fundamentalParams = ['octaves', 'persistence', 'lacunarity', 'hurst', 'seed'];
+            const hasChanged = !this.currentModel.lastGeneratedParams ||
+                fundamentalParams.some(p => params[p] !== this.currentModel.lastGeneratedParams[p]);
+
+            if (hasChanged) {
+                needsNormalizationReset = true;
+            }
+
+            await this.currentModel.update(params, this.view, needsNormalizationReset);
             this.view.drawScene();
         } catch (e) {
             console.error("Error during terrain update:", e);
@@ -255,6 +271,7 @@ class Controller {
             const selectedName = e.target.value;
             this.currentModel = this.models[selectedName];
             this.currentShaderStrategy = this.shaderStrategies[selectedName]; // Keep for scrolling/zoom logic
+            this.currentModel.shaderStrategy.resetNormalization(); // Reset on strategy change
             console.log(`Switched to ${selectedName} strategy.`);
             this.updateTerrain();
         });

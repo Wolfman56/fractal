@@ -9,6 +9,9 @@ export class ShaderStrategy {
         this.normalizePipeline = null;
         this.supportsScrolling = false;
         this.regeneratesOnZoom = false;
+        // State for persistent normalization
+        this.globalMin = Infinity;
+        this.globalMax = -Infinity;
     }
 
     async createPipelines(device, layout) {
@@ -39,6 +42,15 @@ export class ShaderStrategy {
      */
     prepareUniforms(uniformArrayBuffer, params) {
         throw new Error("Method 'prepareUniforms()' must be implemented by subclasses.");
+    }
+
+    /**
+     * Resets the persistent normalization range. Called when fundamental
+     * terrain parameters (seed, octaves, etc.) change.
+     */
+    resetNormalization() {
+        this.globalMin = Infinity;
+        this.globalMax = -Infinity;
     }
 }
 
