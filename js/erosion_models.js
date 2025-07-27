@@ -214,6 +214,7 @@ export class HydraulicErosionModel extends ErosionModel {
         const waterTransportStaging = this.device.createBuffer({ size: stagingBufferSizeBytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
         const sedimentTransportStaging = this.device.createBuffer({ size: stagingBufferSizeBytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
         const waterEvaporationStaging = this.device.createBuffer({ size: stagingBufferSizeBytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+        const finalTerrainStaging = this.device.createBuffer({ size: stagingBufferSizeBytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
 
         const encoder = this.device.createCommandEncoder({ label: "Erosion Debug Encoder" });
 
@@ -273,42 +274,51 @@ export class HydraulicErosionModel extends ErosionModel {
         pass5.end();
         encoder.copyTextureToBuffer({ texture: resources.water.write }, { buffer: waterEvaporationStaging, bytesPerRow: gridSize * 4 }, { width: gridSize, height: gridSize });
 
+        // The final terrain is in the "write" texture after the erosion pass.
+        encoder.copyTextureToBuffer({ texture: resources.terrain.write }, { buffer: finalTerrainStaging, bytesPerRow: gridSize * 4 }, { width: gridSize, height: gridSize });
+
         // Submit and wait
         this.device.queue.submit([encoder.finish()]);
         await this.device.queue.onSubmittedWorkDone();
 
         // Map all buffers
-        const mapPromises = [
-            waterStaging.mapAsync(GPUMapMode.READ), velocityStaging.mapAsync(GPUMapMode.READ),
-            terrainErosionStaging.mapAsync(GPUMapMode.READ), sedimentErosionStaging.mapAsync(GPUMapMode.READ),
-            waterTransportStaging.mapAsync(GPUMapMode.READ), sedimentTransportStaging.mapAsync(GPUMapMode.READ),
-            waterEvaporationStaging.mapAsync(GPUMapMode.READ),
-        ];
+        const mapPromises = [ waterStaging.mapAsync(GPUMapMode.READ), velocityStaging.mapAsync(GPUMapMode.READ), terrainErosionStaging.mapAsync(GPUMapMode.READ), sedimentErosionStaging.mapAsync(GPUMapMode.READ), waterTransportStaging.mapAsync(GPUMapMode.READ), sedimentTransportStaging.mapAsync(GPUMapMode.READ), waterEvaporationStaging.mapAsync(GPUMapMode.READ), finalTerrainStaging.mapAsync(GPUMapMode.READ), ];
         await Promise.all(mapPromises);
 
         // Helper to analyze a buffer
         const analyzeBuffer = (buffer) => {
-            const data = new Float32Array(buffer.getMappedRange());
+            const mappedRange = buffer.getMappedRange();
+            const data = new Float32Array(mappedRange);
+            const dataLength = data.length;
             let sum = 0, min = Infinity, max = -Infinity, nonZeroCount = 0;
             for (const v of data) { sum += v; if (v < min) min = v; if (v > max) max = v; if (Math.abs(v) > 1e-9) nonZeroCount++; }
             buffer.unmap();
-            return { sum: sum.toFixed(4), min: min.toFixed(4), max: max.toFixed(4), avg: (sum / data.length).toFixed(4), nonZero: `${nonZeroCount} / ${data.length}` };
+            return { sum: sum.toFixed(4), min: min.toFixed(4), max: max.toFixed(4), avg: (sum / dataLength).toFixed(4), nonZero: `${nonZeroCount} / ${dataLength}` };
         };
 
         const capturedData = {
-            pass1_water: analyzeBuffer(waterStaging),
-            pass2_velocity: analyzeBuffer(velocityStaging),
-            pass3_terrain: analyzeBuffer(terrainErosionStaging),
-            pass3_sediment: analyzeBuffer(sedimentErosionStaging),
-            pass4_water: analyzeBuffer(waterTransportStaging),
-            pass4_sediment: analyzeBuffer(sedimentTransportStaging),
-            pass5_water: analyzeBuffer(waterEvaporationStaging),
+            pass1_water: analyzeBuffer(waterStaging), pass2_velocity: analyzeBuffer(velocityStaging), pass3_terrain: analyzeBuffer(terrainErosionStaging), pass3_sediment: analyzeBuffer(sedimentErosionStaging), pass4_water: analyzeBuffer(waterTransportStaging), pass4_sediment: analyzeBuffer(sedimentTransportStaging), pass5_water: analyzeBuffer(waterEvaporationStaging),
         };
 
-        // Cleanup
-        waterStaging.destroy(); velocityStaging.destroy(); terrainErosionStaging.destroy(); sedimentErosionStaging.destroy(); waterTransportStaging.destroy(); sedimentTransportStaging.destroy(); waterEvaporationStaging.destroy();
+        const finalHeights = new Float32Array(finalTerrainStaging.getMappedRange()).slice();
+        finalTerrainStaging.unmap();
 
-        return capturedData;
+        // Cleanup
+        waterStaging.destroy();
+        velocityStaging.destroy();
+        terrainErosionStaging.destroy();
+        sedimentErosionStaging.destroy();
+        waterTransportStaging.destroy();
+        sedimentTransportStaging.destroy();
+        waterEvaporationStaging.destroy();
+        finalTerrainStaging.destroy();
+
+        // After running the debug step, we need to swap the main state textures
+        // so the *next* frame starts from the correct state.
+        [this.waterTextureA, this.waterTextureB] = [this.waterTextureB, this.waterTextureA];
+        [this.sedimentTextureA, this.sedimentTextureB] = [this.sedimentTextureB, this.sedimentTextureA];
+
+        return { capturedData, heights: finalHeights };
     }
 }
 

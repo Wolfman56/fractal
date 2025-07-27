@@ -196,6 +196,27 @@ export class BaseModel {
         return { heights: erodedHeights, erosionAmount: totalErosion, depositionAmount: totalDeposition };
     }
 
+    calculateErosionMetrics(erodedHeights) {
+        let totalErosion = 0;
+        let totalDeposition = 0;
+        if (this.originalHeightmap) {
+            const numPoints = erodedHeights.length;
+            for (let i = 0; i < numPoints; i++) {
+                const diff = erodedHeights[i] - this.originalHeightmap[i];
+                if (diff > 0) { // Material was added
+                    totalDeposition += diff;
+                } else { // Material was removed
+                    totalErosion -= diff; // diff is negative, so subtract to make it positive
+                }
+            }
+            if (numPoints > 0) {
+                totalErosion /= numPoints;
+                totalDeposition /= numPoints;
+            }
+        }
+        return { erosionAmount: totalErosion, depositionAmount: totalDeposition };
+    }
+
     async update(params, view, needsNormalizationReset = false) {
         throw new Error("Update method must be implemented by subclasses.");
     }

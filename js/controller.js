@@ -210,24 +210,34 @@ class Controller {
         this.isEroding = true;
         this.wantsUpdate = false; // Cancel any pending scroll updates
 
-        const iterations = parseInt(document.getElementById('erosion-iterations')?.value || '10', 10);
-        const erosionParams = {
-            rainAmount: parseFloat(document.getElementById('erosion-rain')?.value || '0.01'),
-            evapRate: parseFloat(document.getElementById('erosion-evap')?.value || '0.1'),
-            solubility: parseFloat(document.getElementById('erosion-solubility')?.value || '0.1'),
-            depositionRate: parseFloat(document.getElementById('erosion-deposition')?.value || '0.3'),
-            capacityFactor: parseFloat(document.getElementById('erosion-capacity')?.value || '8.0'),
-        };
-
         try {
-            // Pass the pipelines and new params to the model
-            const { heights, erosionAmount, depositionAmount } = await this.currentModel.runErosion(iterations, erosionParams, this.currentErosionModel);
-            this.totalErosionIterations += iterations;
-            this.lastErosionAmount = erosionAmount + depositionAmount;
-            if (heights) {
-                this.view.updateTileMesh('0,0', heights, this.currentModel.lastGeneratedParams);
-                this.updateStatsUI(erosionAmount, depositionAmount, this.totalErosionIterations);
-                this.view.drawScene();
+            const iterations = parseInt(document.getElementById('erosion-iterations')?.value || '10', 10);
+            const erosionParams = this._getErosionParamsFromUI();
+
+            if (this.isCapturing && this.currentErosionModel instanceof HydraulicErosionModel) {
+                // If capturing, run the simulation step-by-step
+                for (let i = 0; i < iterations; i++) {
+                    const { heights, erosionAmount, depositionAmount, capturedData } = await this._runSingleErosionStep(erosionParams);
+                    if (capturedData) {
+                        this.debugCaptureData.push({ frame: this.totalErosionIterations, data: capturedData });
+                    }
+                    this.totalErosionIterations++;
+                    if (heights) {
+                        this.view.updateTileMesh('0,0', heights, this.currentModel.lastGeneratedParams);
+                        this.updateStatsUI(erosionAmount, depositionAmount, this.totalErosionIterations);
+                        this.view.drawScene(); // Redraw after each step for better UX
+                    }
+                }
+            } else {
+                // Otherwise, run all iterations at once for performance
+                const { heights, erosionAmount, depositionAmount } = await this.currentModel.runErosion(iterations, erosionParams, this.currentErosionModel);
+                this.totalErosionIterations += iterations;
+                this.lastErosionAmount = erosionAmount + depositionAmount;
+                if (heights) {
+                    this.view.updateTileMesh('0,0', heights, this.currentModel.lastGeneratedParams);
+                    this.updateStatsUI(erosionAmount, depositionAmount, this.totalErosionIterations);
+                    this.view.drawScene();
+                }
             }
         } catch (e) {
             console.error("Error during erosion:", e);
@@ -260,32 +270,12 @@ class Controller {
         if (this.isStepInProgress || this.isUpdating || this.isEroding) return;
         this.isStepInProgress = true;
 
-        if (this.isCapturing && this.currentErosionModel instanceof HydraulicErosionModel) {
-            // Create a snapshot of the simulation state BEFORE this frame's execution
-            const captureParams = {
-                rainAmount: parseFloat(document.getElementById('erosion-rain')?.value || '0.01'),
-                evapRate: parseFloat(document.getElementById('erosion-evap')?.value || '0.1'),
-                solubility: parseFloat(document.getElementById('erosion-solubility')?.value || '0.1'),
-                depositionRate: parseFloat(document.getElementById('erosion-deposition')?.value || '0.3'),
-                capacityFactor: parseFloat(document.getElementById('erosion-capacity')?.value || '8.0'),
-            };
-            const capturedFrame = await this.currentErosionModel.debugStep(captureParams, {
-                read: this.currentModel.heightmapTextureA,
-                write: this.currentModel.heightmapTextureB
-            });
-            this.debugCaptureData.push({ frame: this.totalErosionIterations, data: capturedFrame });
-        }
-
         try {
-            const erosionParams = {
-                rainAmount: parseFloat(document.getElementById('erosion-rain')?.value || '0.01'),
-                evapRate: parseFloat(document.getElementById('erosion-evap')?.value || '0.1'),
-                solubility: parseFloat(document.getElementById('erosion-solubility')?.value || '0.1'),
-                depositionRate: parseFloat(document.getElementById('erosion-deposition')?.value || '0.3'),
-                capacityFactor: parseFloat(document.getElementById('erosion-capacity')?.value || '8.0'),
-            };
-            // Pass the pipelines and new params to the model
-            const { heights, erosionAmount, depositionAmount } = await this.currentModel.runErosion(1, erosionParams, this.currentErosionModel);
+            const erosionParams = this._getErosionParamsFromUI();
+            const { heights, erosionAmount, depositionAmount, capturedData } = await this._runSingleErosionStep(erosionParams);
+            if (capturedData) {
+                this.debugCaptureData.push({ frame: this.totalErosionIterations, data: capturedData });
+            }
             this.totalErosionIterations++;
             if (heights) {
                 this.view.updateTileMesh('0,0', heights, this.currentModel.lastGeneratedParams);
@@ -314,7 +304,7 @@ class Controller {
         }
     }
 
-    updateStatsUI(erosion, deposition, iterations) {
+    updateStatsUI(erosion = 0, deposition = 0, iterations = 0) {
         const metricsContainer = document.getElementById('erosion-metrics');
         if (metricsContainer) {
             // The average difference is small, so we scale it for better readability in the UI.
@@ -357,6 +347,41 @@ class Controller {
             console.log("Cleared capture data.");
         }
     }
+
+    _getErosionParamsFromUI() {
+        const wetness = parseFloat(document.getElementById('erosion-wetness')?.value || '0.2');
+
+        // Map the single "Wetness" value to the two underlying simulation parameters.
+        // This gives the user an intuitive single control while ensuring the simulation remains stable.
+        const rainAmount = 0.001 + wetness * 0.05; // Map wetness [0.01, 1.0] to rain [~0.001, 0.05]
+        const evapRate = 0.8 - wetness * 0.75;   // Map wetness [0.01, 1.0] to evap [~0.8, 0.05]
+
+        return {
+            rainAmount: rainAmount,
+            evapRate: evapRate,
+            solubility: parseFloat(document.getElementById('erosion-solubility')?.value || '0.1'),
+            depositionRate: parseFloat(document.getElementById('erosion-deposition')?.value || '0.3'),
+            capacityFactor: parseFloat(document.getElementById('erosion-capacity')?.value || '8.0'),
+        };
+    }
+
+    async _runSingleErosionStep(erosionParams) {
+        if (!this.isCapturing || !(this.currentErosionModel instanceof HydraulicErosionModel)) {
+            // If not capturing, just run a normal single iteration.
+            const results = await this.currentModel.runErosion(1, erosionParams, this.currentErosionModel);
+            return { ...results, capturedData: null }; // Return a consistent object shape
+        }
+
+        // If capturing, run the debug step which returns more data.
+        const { capturedData, heights } = await this.currentErosionModel.debugStep(erosionParams, {
+            read: this.currentModel.heightmapTextureA,
+            write: this.currentModel.heightmapTextureB
+        });
+        
+        // When capturing, we must manually calculate the metrics from the returned heights.
+        const metrics = this.currentModel.calculateErosionMetrics(heights);
+        return { heights, erosionAmount: metrics.erosionAmount, depositionAmount: metrics.depositionAmount, capturedData };
+     }
 
     gameLoop(timestamp) {
         this.gameLoopId = requestAnimationFrame(this.gameLoop.bind(this));
@@ -445,7 +470,7 @@ class Controller {
         });
 
         // Erosion sliders
-        ['erosion-iterations', 'erosion-rain', 'erosion-solubility', 'erosion-evap', 'erosion-deposition', 'erosion-capacity'].forEach(id => {
+        ['erosion-iterations', 'erosion-wetness', 'erosion-solubility', 'erosion-deposition', 'erosion-capacity'].forEach(id => {
             const slider = document.getElementById(id);
             if (slider) {
                 slider.addEventListener('input', () => {
@@ -500,7 +525,7 @@ class Controller {
                 // For other strategies, just redraw the scene
                 if (!this.isAnimating) this.view.drawScene();
             }
-        });
+        }, { passive: false });
 
         // Touch controls for orbit and pinch-to-zoom
         let initialPinchDistance = 0;
