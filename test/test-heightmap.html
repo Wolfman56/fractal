@@ -13,21 +13,43 @@
 <head>
     <meta charset="UTF-8">
     <title>Fractal Landscape Test</title>
-    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="../css/style.css">
 </head>
 <body>
     <main class="app-container">
         <canvas id="canvas" width="800" height="600"></canvas>
-        <div id="action-bar">
-            <label style="display: inline-flex; vertical-align: middle;"><span>Erosion Iterations</span><input type="range" id="erosion-iterations" min="1" max="100" value="32"><span id="erosion-iterations-value">32</span></label>
-            <button id="erode-terrain">Erode</button>
-            <button id="snapshot-button">Snapshot</button>
+        <div id="action-bar" style="display: flex; flex-wrap: wrap; justify-content: center; gap: 15px; background: #2a2a2e; padding: 10px; border-radius: 5px; max-width: 900px;">
+            <div id="erosion-parameters" style="display: flex; flex-direction: column; gap: 5px; padding: 10px; border: 1px solid #444; border-radius: 5px;">
+                <label style="display: inline-flex; vertical-align: middle; color: white; justify-content: space-between;">
+                    <span>Erosion Model</span>
+                    <select id="erosion-model-select" style="width: 60%;">
+                        <option value="hydraulic" selected>Hydraulic</option>
+                        <option value="simple">Simple (Thermal)</option>
+                    </select>
+                </label>
+                <label style="display: inline-flex; vertical-align: middle;"><span>Erosion Iterations</span><input type="range" id="erosion-iterations" min="1" max="100" value="32"><span id="erosion-iterations-value">32</span></label>
+                <label style="display: inline-flex; vertical-align: middle;"><span>Rain Amount</span><input type="range" id="erosion-rain" min="0.001" max="0.1" step="0.001" value="0.05"><span id="erosion-rain-value">0.05</span></label>
+                <label style="display: inline-flex; vertical-align: middle;"><span>Solubility</span><input type="range" id="erosion-solubility" min="0.01" max="1.0" step="0.01" value="0.5"><span id="erosion-solubility-value">0.5</span></label>
+                <label style="display: inline-flex; vertical-align: middle;"><span>Evaporation</span><input type="range" id="erosion-evap" min="0.01" max="0.5" step="0.01" value="0.1"><span id="erosion-evap-value">0.1</span></label>
+                <label style="display: inline-flex; vertical-align: middle;"><span>Deposition Rate</span><input type="range" id="erosion-deposition" min="0.01" max="1.0" step="0.01" value="0.3"><span id="erosion-deposition-value">0.3</span></label>
+                <label style="display: inline-flex; vertical-align: middle;"><span>Capacity</span><input type="range" id="erosion-capacity" min="1" max="64" step="1" value="20"><span id="erosion-capacity-value">20</span></label>
+            </div>
+            <div id="erosion-actions" style="display: flex; flex-direction: column; gap: 10px; justify-content: center;">
+                <button id="erode-terrain">Erode</button>
+                <button id="animate-erosion">Animate</button>
+                <button id="snapshot-button">Snapshot</button>
+                <hr style="margin: 5px 0; border-color: #444;">
+                <button id="capture-toggle" title="Toggle capturing intermediate data on each erosion step.">Capture Data</button>
+                <button id="save-capture" title="Saves the captured debug data to a JSON file.">Save Capture</button>
+                <button id="clear-capture" title="Clears all captured debug data.">Clear Capture</button>
+            </div>
+            <div id="erosion-stats" style="color: white; padding: 5px; text-align: center; font-size: 0.9em; display: flex; justify-content: space-around; width: 100%; border-top: 1px solid #444; margin-top: 10px; padding-top: 10px;"><span id="erosion-metrics"></span><span id="capture-status"></span></div>
         </div>
     </main>
-    <script src="../js/fractal-landscape.js" type="module" defer></script>
+    <script src="../js/controller.js" type="module" defer></script>
 </body>
 </html>

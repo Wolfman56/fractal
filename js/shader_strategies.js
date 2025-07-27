@@ -56,7 +56,7 @@ export class ShaderStrategy {
 
 export class ScrollingShaderStrategy extends ShaderStrategy {
     constructor() {
-        super('Scrolling', 'shaders/compute-scrolling.wgsl');
+        super('Scrolling', '/shaders/compute-scrolling.wgsl');
         this.worldOffset = { x: 0, y: 0 };
         this.supportsScrolling = true;
     }
@@ -90,7 +90,7 @@ export class FractalZoomShaderStrategy extends ShaderStrategy {
     constructor() {
         // This strategy uses the standard compute shader. The "zoom" effect
         // is created by the Controller manipulating the 'scale' uniform.
-        super('Fractal Zoom', 'shaders/compute.wgsl');
+        super('Fractal Zoom', '/shaders/compute.wgsl');
         this.regeneratesOnZoom = true;
     }
 
@@ -110,7 +110,7 @@ export class FractalZoomShaderStrategy extends ShaderStrategy {
 
 export class ScrollAndZoomStrategy extends ShaderStrategy {
     constructor() {
-        super('Scroll & Zoom', 'shaders/compute-scrolling.wgsl');
+        super('Scroll & Zoom', '/shaders/compute-scrolling.wgsl');
         this.worldOffset = { x: 0, y: 0 };
         this.supportsScrolling = true;
         this.regeneratesOnZoom = true;
@@ -141,7 +141,7 @@ export class ScrollAndZoomStrategy extends ShaderStrategy {
 
 export class TiledLODShaderStrategy extends ShaderStrategy {
     constructor() {
-        super('Tiled LOD', 'shaders/compute-tiled-lod.wgsl');
+        super('Tiled LOD', '/shaders/compute-tiled-lod.wgsl');
         // This strategy's behavior is more complex than the simple flags can represent.
         // The Controller will have specific logic for when this strategy is active.
     }

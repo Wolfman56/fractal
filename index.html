@@ -30,8 +30,21 @@
         <label><span>Seed</span><input type="range" id="seed" min="0" max="10000" value="42"><span id="seed-value">42</span></label>
         <label><span>Height Multiplier</span><input type="range" id="heightMultiplier" min="0.1" max="5" step="0.1" value="0.5"><span id="heightMultiplier-value">0.5</span></label>
         <label><span>Hurst</span><input type="range" id="hurst" min="0.1" max="2" step="0.1" value="0.6"><span id="hurst-value">0.6</span></label>
-        <label><span>Erosion Amount</span><input type="range" id="erosion-iterations" min="1" max="64" value="10"><span id="erosion-iterations-value">10</span></label>
-        <label><span>Erosion Rate</span><input type="range" id="erosion-rate" min="0.001" max="0.1" step="0.001" value="0.01"><span id="erosion-rate-value">0.01</span></label>
+        <hr>
+        <h4 style="text-align: center; margin-bottom: 10px; margin-top: 0;">Erosion</h4>
+        <label>
+            <span>Erosion Model</span>
+            <select id="erosion-model-select" style="width: 60%;">
+                <option value="hydraulic" selected>Hydraulic</option>
+                <option value="simple">Simple (Thermal)</option>
+            </select>
+        </label>
+        <label><span>Iterations</span><input type="range" id="erosion-iterations" min="1" max="100" value="32"><span id="erosion-iterations-value">32</span></label>
+        <label><span>Rain Amount</span><input type="range" id="erosion-rain" min="0.001" max="0.1" step="0.001" value="0.05"><span id="erosion-rain-value">0.05</span></label>
+        <label><span>Solubility</span><input type="range" id="erosion-solubility" min="0.01" max="1.0" step="0.01" value="0.5"><span id="erosion-solubility-value">0.5</span></label>
+        <label><span>Evaporation</span><input type="range" id="erosion-evap" min="0.01" max="0.5" step="0.01" value="0.1"><span id="erosion-evap-value">0.1</span></label>
+        <label><span>Deposition Rate</span><input type="range" id="erosion-deposition" min="0.01" max="1.0" step="0.01" value="0.3"><span id="erosion-deposition-value">0.3</span></label>
+        <label><span>Capacity</span><input type="range" id="erosion-capacity" min="1" max="64" step="1" value="20"><span id="erosion-capacity-value">20</span></label>
     </div>
     <main class="app-container">
         <canvas id="canvas"></canvas>

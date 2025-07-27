@@ -30,7 +30,17 @@ export default class View {
             return null;
         }
         const adapter = await navigator.gpu.requestAdapter();
-        this.device = await adapter.requestDevice();
+
+        const requiredLimits = {};
+        // The erosion shader requires up to 8 storage textures.
+        // We check if the adapter supports this and request it.
+        if (adapter.limits.maxStorageTexturesPerShaderStage >= 8) {
+            requiredLimits.maxStorageTexturesPerShaderStage = 8;
+        } else {
+            // Warn the developer if the hardware is not capable.
+            console.warn(`This adapter only supports ${adapter.limits.maxStorageTexturesPerShaderStage} storage textures per shader stage. The erosion simulation, which requires 8, may not work correctly.`);
+        }
+        this.device = await adapter.requestDevice({ requiredLimits });
 
         this.device.lost.then(info => console.error(`WebGPU device was lost: ${info.message}`));
         this.device.addEventListener('uncapturederror', (event) => console.error('A WebGPU uncaptured error occurred:', event.error));
@@ -45,13 +55,11 @@ export default class View {
 
         // Fetch and create all pipelines
         console.log("Loading shader files...");
-        const [renderCode, erosionCode] = await Promise.all([
-            fetch('shaders/render.wgsl').then(res => res.text()),
-            fetch('shaders/erosion.wgsl').then(res => res.text())
+        const [renderCode] = await Promise.all([
+            fetch('/shaders/render.wgsl').then(res => res.text()),
         ]);
 
         const renderModule = this.device.createShaderModule({ code: renderCode });
-        const erosionModule = this.device.createShaderModule({ code: erosionCode });
 
         const computeBindGroupLayout = this.device.createBindGroupLayout({
             entries: [
@@ -62,9 +70,6 @@ export default class View {
         });
         const computePipelineLayout = this.device.createPipelineLayout({ bindGroupLayouts: [computeBindGroupLayout] });
         
-        const erosionPipeline = await this.device.createComputePipeline({ layout: 'auto', compute: { module: erosionModule, entryPoint: 'main' } });
-        await checkShaderCompilation(erosionPipeline, 'Erosion Compute Pipeline');
-
         this.renderPipeline = await this.device.createRenderPipeline({
             layout: 'auto',
             vertex: {
@@ -85,7 +90,6 @@ export default class View {
         return {
             device: this.device,
             computePipelineLayout: computePipelineLayout,
-            erosion: erosionPipeline,
         };
     }
 

@@ -18,21 +18,21 @@ export class BaseModel {
         this.computeMinMaxStagingBuffer = null;
         this.erosionParamsBuffer = null;
         this.heightmapTextureA = null;
-        this.heightmapTextureB = null;
+        this.heightmapTextureB = null; // Ping-pong buffer for terrain
 
         // Bind Groups
         this.computeBindGroup = null;
-        this.erosionBindGroupAtoB = null;
-        this.erosionBindGroupBtoA = null;
 
         // Data state
         this.lastGeneratedHeightmap = null;
+        this.originalHeightmap = null; // A pristine copy for measuring erosion
         this.lastGeneratedParams = null;
         this.erosionFrameCounter = 0;
     }
 
-    recreateResources(gridSize, erosionPipeline) {
+    recreateResources(gridSize) {
         this.gridSize = gridSize;
+        this.originalHeightmap = null;
 
         [this.computeUniformBuffer, this.computeMinMaxBuffer, this.erosionParamsBuffer,
          this.computeOutputBuffer, this.computeStagingBuffer, this.computeMinMaxStagingBuffer, this.heightmapTextureA,
@@ -40,18 +40,21 @@ export class BaseModel {
 
         this.computeUniformBuffer = this.device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         this.computeMinMaxBuffer = this.device.createBuffer({ size: 8, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
-        this.erosionParamsBuffer = this.device.createBuffer({ size: 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         this.computeOutputBuffer = this.device.createBuffer({ size: gridSize * gridSize * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
         this.computeStagingBuffer = this.device.createBuffer({ size: this.computeOutputBuffer.size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
         this.computeMinMaxStagingBuffer = this.device.createBuffer({ size: 8, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
 
-        const textureDescriptor = {
+        const r32fDescriptor = {
             size: [gridSize, gridSize],
             format: 'r32float',
             usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC,
         };
-        this.heightmapTextureA = this.device.createTexture(textureDescriptor);
-        this.heightmapTextureB = this.device.createTexture(textureDescriptor);
+
+        this.heightmapTextureA = this.device.createTexture(r32fDescriptor);
+        this.heightmapTextureB = this.device.createTexture(r32fDescriptor);
+
+        // For simplicity, we'll create the bind groups just-in-time in the runErosion method,
+        // as the bindings change with every pass and ping-pong swap.
 
         this.computeBindGroup = this.device.createBindGroup({
             layout: this.shaderStrategy.computePipeline.getBindGroupLayout(0),
@@ -59,22 +62,6 @@ export class BaseModel {
                 { binding: 0, resource: { buffer: this.computeUniformBuffer } },
                 { binding: 1, resource: { buffer: this.computeOutputBuffer } },
                 { binding: 2, resource: { buffer: this.computeMinMaxBuffer } },
-            ],
-        });
-        this.erosionBindGroupAtoB = this.device.createBindGroup({
-            layout: erosionPipeline.getBindGroupLayout(0),
-            entries: [
-                { binding: 0, resource: this.heightmapTextureA.createView() },
-                { binding: 1, resource: this.heightmapTextureB.createView() },
-                { binding: 2, resource: { buffer: this.erosionParamsBuffer } },
-            ],
-        });
-        this.erosionBindGroupBtoA = this.device.createBindGroup({
-            layout: erosionPipeline.getBindGroupLayout(0),
-            entries: [
-                { binding: 0, resource: this.heightmapTextureB.createView() },
-                { binding: 1, resource: this.heightmapTextureA.createView() },
-                { binding: 2, resource: { buffer: this.erosionParamsBuffer } },
             ],
         });
     }
@@ -132,7 +119,7 @@ export class BaseModel {
         // Asynchronously wait for buffer mappings
         const mapPromises = [withTimeout(this.computeStagingBuffer.mapAsync(GPUMapMode.READ), 10000)];
         if (this.shaderStrategy.normalizePipeline) {
-            mapPromises.push(withTimeout(this.computeMinMaxStagingBuffer.mapAsync(GPUMapMode.READ), 1000));
+            mapPromises.push(withTimeout(this.computeMinMaxStagingBuffer.mapAsync(GPUMapMode.READ), 10000));
         }
         await Promise.all(mapPromises);
 
@@ -154,25 +141,25 @@ export class BaseModel {
         this.computeStagingBuffer.unmap();
         
         this.lastGeneratedHeightmap = heights;
+        this.originalHeightmap = heights.slice(); // Store a pristine copy for erosion measurement
         this.erosionFrameCounter = 0;
         this.device.queue.writeTexture({ texture: this.heightmapTextureA }, heights, { bytesPerRow: this.gridSize * 4 }, { width: this.gridSize, height: this.gridSize });
 
         return heights;
     }
 
-    async runErosion(iterations, rate, erosionPipeline) {
-        this.device.queue.writeBuffer(this.erosionParamsBuffer, 0, new Float32Array([rate]));
+    async runErosion(iterations, params, erosionModel) {
         const encoder = this.device.createCommandEncoder();
-        for (let i = 0; i < iterations; i++) {
-            const pass = encoder.beginComputePass();
-            pass.setPipeline(erosionPipeline);
-            pass.setBindGroup(0, this.erosionFrameCounter % 2 === 0 ? this.erosionBindGroupAtoB : this.erosionBindGroupBtoA);
-            pass.dispatchWorkgroups(Math.ceil(this.gridSize / 16), Math.ceil(this.gridSize / 16));
-            pass.end();
-            this.erosionFrameCounter++;
-        }
 
-        const finalTexture = this.erosionFrameCounter % 2 === 1 ? this.heightmapTextureB : this.heightmapTextureA;
+        // Delegate the actual erosion work to the selected erosion model.
+        erosionModel.run(encoder, iterations, params, {
+            read: this.heightmapTextureA,
+            write: this.heightmapTextureB
+        });
+
+        // The erosion model handles the ping-ponging. After N iterations, we determine the final texture.
+        const finalTexture = (iterations % 2 === 0) ? this.heightmapTextureA : this.heightmapTextureB;
+
         encoder.copyTextureToBuffer({ texture: finalTexture }, { buffer: this.computeStagingBuffer, bytesPerRow: this.gridSize * 4 }, { width: this.gridSize, height: this.gridSize });
         this.device.queue.submit([encoder.finish()]);
 
@@ -181,10 +168,32 @@ export class BaseModel {
         this.computeStagingBuffer.unmap();
 
         this.lastGeneratedHeightmap = erodedHeights;
-        this.device.queue.writeTexture({ texture: this.heightmapTextureA }, erodedHeights, { bytesPerRow: this.gridSize * 4 }, { width: this.gridSize, height: this.gridSize });
-        this.erosionFrameCounter = 0;
 
-        return erodedHeights;
+        // After getting the new heights, calculate the total difference from the original
+        let totalErosion = 0;
+        let totalDeposition = 0;
+        if (this.originalHeightmap) {
+            const numPoints = erodedHeights.length;
+            for (let i = 0; i < numPoints; i++) {
+                const diff = erodedHeights[i] - this.originalHeightmap[i];
+                if (diff > 0) { // Material was added
+                    totalDeposition += diff;
+                } else { // Material was removed
+                    totalErosion -= diff; // diff is negative, so subtract to make it positive
+                }
+            }
+            // Convert the sums to an average difference per point for a more stable metric.
+            if (numPoints > 0) {
+                totalErosion /= numPoints;
+                totalDeposition /= numPoints;
+            }
+        }
+
+        // Copy the final eroded heights back to both terrain textures to ensure consistency for the next erosion run
+        this.device.queue.writeTexture({ texture: this.heightmapTextureA }, erodedHeights, { bytesPerRow: this.gridSize * 4 }, { width: this.gridSize, height: this.gridSize });
+        this.device.queue.writeTexture({ texture: this.heightmapTextureB }, erodedHeights, { bytesPerRow: this.gridSize * 4 }, { width: this.gridSize, height: this.gridSize });
+
+        return { heights: erodedHeights, erosionAmount: totalErosion, depositionAmount: totalDeposition };
     }
 
     async update(params, view, needsNormalizationReset = false) {
