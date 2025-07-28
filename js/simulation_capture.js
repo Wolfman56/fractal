@@ -1,0 +1,69 @@
+/**
+ * Manages the lifecycle of capturing and saving simulation debug data.
+ */
+export default class SimulationCapture {
+    constructor(uiController) {
+        this.uiController = uiController;
+        this.isCapturing = false;
+        this.debugCaptureData = [];
+    }
+
+    /**
+     * Toggles the data capture state on or off.
+     */
+    toggle() {
+        this.isCapturing = !this.isCapturing;
+        this.uiController.toggleButton('capture-toggle', this.isCapturing);
+        console.log(`Data capture ${this.isCapturing ? 'enabled' : 'disabled'}.`);
+    }
+
+    /**
+     * Saves the captured data to a JSON file.
+     */
+    save() {
+        if (this.debugCaptureData.length === 0) {
+            alert("No debug data captured.");
+            return;
+        }
+        const dataStr = JSON.stringify(this.debugCaptureData, null, 2);
+        const blob = new Blob([dataStr], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `erosion_capture_${Date.now()}.json`;
+        link.click();
+        URL.revokeObjectURL(url);
+        console.log(`Saved ${this.debugCaptureData.length} frames of capture data.`);
+    }
+
+    /**
+     * Clears all captured data after user confirmation.
+     * @returns {boolean} - True if data was cleared, false otherwise.
+     */
+    clear() {
+        if (this.debugCaptureData.length > 0 && window.confirm(`Are you sure you want to clear ${this.debugCaptureData.length} captured frames?`)) {
+            this.debugCaptureData = [];
+            console.log("Cleared capture data.");
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Adds a new frame of captured data to the internal array.
+     * @param {number} frameNumber - The current iteration/frame number.
+     * @param {object} data - The captured data object for this frame.
+     */
+    addFrame(frameNumber, data) {
+        if (!this.isCapturing || !data) return;
+        this.debugCaptureData.push({ frame: frameNumber, data });
+    }
+
+    /**
+     * Gets the current number of captured frames.
+     * @returns {number}
+     */
+    get frameCount() {
+        return this.debugCaptureData.length;
+    }
+}

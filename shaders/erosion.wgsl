@@ -8,6 +8,7 @@ struct ErosionUniforms {
     minSlope: f32,
     capacityFactor: f32,
     rainAmount: f32,
+    seaLevel: f32,
     gridSize: u32,
 }
 
@@ -79,6 +80,12 @@ fn main_flow(@builtin(global_invocation_id) id: vec3<u32>) {
     if (flux_sum > 0.0) {
         let factor = min(1.0, center_hw.y / flux_sum);
         flux = flux * factor;
+    }
+
+    // If the cell is below sea level, it acts as an infinite sink.
+    // No water flows out of it.
+    if (center_hw.x < uniforms.seaLevel) {
+        flux = vec4f(0.0);
     }
 
     textureStore(velocity_out, id.xy, flux);

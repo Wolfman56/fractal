@@ -196,6 +196,10 @@ export class BaseModel {
         return { heights: erodedHeights, erosionAmount: totalErosion, depositionAmount: totalDeposition };
     }
 
+    swapTerrainTextures() {
+        [this.heightmapTextureA, this.heightmapTextureB] = [this.heightmapTextureB, this.heightmapTextureA];
+    }
+
     calculateErosionMetrics(erodedHeights) {
         let totalErosion = 0;
         let totalDeposition = 0;

@@ -26,20 +26,17 @@
             <div id="erosion-parameters" style="display: flex; flex-direction: column; gap: 5px; padding: 10px; border: 1px solid #444; border-radius: 5px;">
                 <label style="display: inline-flex; vertical-align: middle; color: white; justify-content: space-between;">
                     <span>Erosion Model</span>
-                    <select id="erosion-model-select" style="width: 60%;">
-                        <option value="hydraulic" selected>Hydraulic</option>
-                        <option value="simple">Simple (Thermal)</option>
-                    </select>
+                    <select id="erosion-model-select" style="width: 60%;"></select>
                 </label>
                 <label style="display: inline-flex; vertical-align: middle;"><span>Erosion Iterations</span><input type="range" id="erosion-iterations" min="1" max="100" value="32"><span id="erosion-iterations-value">32</span></label>
                 <label style="display: inline-flex; vertical-align: middle;"><span>Wetness</span><input type="range" id="erosion-wetness" min="0.01" max="1.0" step="0.01" value="0.2"><span id="erosion-wetness-value">0.2</span></label>
                 <label style="display: inline-flex; vertical-align: middle;"><span>Solubility</span><input type="range" id="erosion-solubility" min="0.01" max="1.0" step="0.01" value="0.5"><span id="erosion-solubility-value">0.5</span></label>
                 <label style="display: inline-flex; vertical-align: middle;"><span>Deposition Rate</span><input type="range" id="erosion-deposition" min="0.01" max="1.0" step="0.01" value="0.3"><span id="erosion-deposition-value">0.3</span></label>
                 <label style="display: inline-flex; vertical-align: middle;"><span>Capacity</span><input type="range" id="erosion-capacity" min="1" max="64" step="1" value="20"><span id="erosion-capacity-value">20</span></label>
+                <label style="display: inline-flex; vertical-align: middle;"><span>Sea Level</span><input type="range" id="erosion-sea-level" min="0.0" max="1.0" step="0.01" value="0.15"><span id="erosion-sea-level-value">0.15</span></label>
             </div>
             <div id="erosion-actions" style="display: flex; flex-direction: column; gap: 10px; justify-content: center;">
                 <button id="erode-terrain">Erode</button>
-                <button id="animate-erosion">Animate</button>
                 <button id="snapshot-button">Snapshot</button>
                 <hr style="margin: 5px 0; border-color: #444;">
                 <button id="capture-toggle" title="Toggle capturing intermediate data on each erosion step.">Capture Data</button>
