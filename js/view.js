@@ -159,7 +159,7 @@ export default class View {
         this.tiles = newTiles;
     }
 
-    updateTileMesh(key, heights, params, globalOffset = null, neighborLODs = {}) {
+    updateTileMesh(key, heights, params, waterHeights = null, globalOffset = null, neighborLODs = {}) {
         const tile = this.tiles.get(key);
         if (!tile) return;
 
@@ -170,6 +170,7 @@ export default class View {
         const { positions, normals, colors, indices, yValues } = createTileGeometry(
             heights,
             params,
+            waterHeights,
             neighborLODs,
             tile.lod,
             offset

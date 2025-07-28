@@ -159,13 +159,26 @@ export class BaseModel {
 
         // The erosion model handles the ping-ponging. After N iterations, we determine the final texture.
         const finalTexture = (iterations % 2 === 0) ? this.heightmapTextureA : this.heightmapTextureB;
+        const finalWaterTexture = (iterations % 2 === 0) ? erosionModel.waterTextureA : erosionModel.waterTextureB;
 
+        const waterStagingBuffer = this.device.createBuffer({ size: this.computeStagingBuffer.size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
         encoder.copyTextureToBuffer({ texture: finalTexture }, { buffer: this.computeStagingBuffer, bytesPerRow: this.gridSize * 4 }, { width: this.gridSize, height: this.gridSize });
+        if (finalWaterTexture) {
+            encoder.copyTextureToBuffer({ texture: finalWaterTexture }, { buffer: waterStagingBuffer, bytesPerRow: this.gridSize * 4 }, { width: this.gridSize, height: this.gridSize });
+        }
+
         this.device.queue.submit([encoder.finish()]);
 
-        await withTimeout(this.computeStagingBuffer.mapAsync(GPUMapMode.READ), 10000);
+        const mapPromises = [withTimeout(this.computeStagingBuffer.mapAsync(GPUMapMode.READ), 10000)];
+        if (finalWaterTexture) {
+            mapPromises.push(withTimeout(waterStagingBuffer.mapAsync(GPUMapMode.READ), 10000));
+        }
+        await Promise.all(mapPromises);
+
         const erodedHeights = new Float32Array(this.computeStagingBuffer.getMappedRange()).slice();
         this.computeStagingBuffer.unmap();
+        const waterHeights = finalWaterTexture ? new Float32Array(waterStagingBuffer.getMappedRange()).slice() : null;
+        waterStagingBuffer.destroy();
 
         this.lastGeneratedHeightmap = erodedHeights;
 
@@ -193,7 +206,7 @@ export class BaseModel {
         this.device.queue.writeTexture({ texture: this.heightmapTextureA }, erodedHeights, { bytesPerRow: this.gridSize * 4 }, { width: this.gridSize, height: this.gridSize });
         this.device.queue.writeTexture({ texture: this.heightmapTextureB }, erodedHeights, { bytesPerRow: this.gridSize * 4 }, { width: this.gridSize, height: this.gridSize });
 
-        return { heights: erodedHeights, erosionAmount: totalErosion, depositionAmount: totalDeposition };
+        return { heights: erodedHeights, waterHeights, erosionAmount: totalErosion, depositionAmount: totalDeposition };
     }
 
     swapTerrainTextures() {

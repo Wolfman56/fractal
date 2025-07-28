@@ -155,21 +155,21 @@ export default class SimulationController {
         try {
             if (this.simulationCapture.isCapturing && this.currentErosionModel instanceof HydraulicErosionModelDebug) {
                 for (let i = 0; i < iterations; i++) {
-                    const { heights, erosionAmount, depositionAmount } = await this._runSingleErosionStep(erosionParams);
+                    const { heights, waterHeights, erosionAmount, depositionAmount } = await this._runSingleErosionStep(erosionParams);
                     this.currentModel.swapTerrainTextures();
                     this.totalErosionIterations++;
                     if (heights) {
-                        this.view.updateTileMesh('0,0', heights, this.currentModel.lastGeneratedParams);
+                        this.view.updateTileMesh('0,0', heights, this.currentModel.lastGeneratedParams, waterHeights);
                         this.uiController.updateStats(erosionAmount, depositionAmount, this.totalErosionIterations, this.simulationCapture.frameCount);
                         this.view.drawScene();
                     }
                 }
             } else {
-                const { heights, erosionAmount, depositionAmount } = await this.currentModel.runErosion(iterations, erosionParams, this.currentErosionModel);
+                const { heights, waterHeights, erosionAmount, depositionAmount } = await this.currentModel.runErosion(iterations, erosionParams, this.currentErosionModel);
                 this.totalErosionIterations += iterations;
                 this.lastErosionAmount = erosionAmount + depositionAmount;
                 if (heights) {
-                    this.view.updateTileMesh('0,0', heights, this.currentModel.lastGeneratedParams);
+                    this.view.updateTileMesh('0,0', heights, this.currentModel.lastGeneratedParams, waterHeights);
                     this.uiController.updateStats(erosionAmount, depositionAmount, this.totalErosionIterations, this.simulationCapture.frameCount);
                     this.view.drawScene();
                 }
@@ -196,26 +196,20 @@ export default class SimulationController {
     }
 
     async _runSingleErosionStep(erosionParams) {
-        if (this.simulationCapture.isCapturing && this.currentErosionModel instanceof HydraulicErosionModel) {
+        let results;
+        if (this.simulationCapture.isCapturing && this.currentErosionModel instanceof HydraulicErosionModelDebug) {
             // If capturing, run the debug step which returns more data.
-            const debugResults = await this.currentErosionModel.debugStep(erosionParams, {
+            results = await this.currentErosionModel.captureSingleStep(erosionParams, {
                 read: this.currentModel.heightmapTextureA,
                 write: this.currentModel.heightmapTextureB
             });
-
-            this.simulationCapture.addFrame(this.totalErosionIterations, debugResults.capturedData);
-
-            // After any single step, we must "commit" the result back to the GPU texture that was written to.
-            this.device.queue.writeTexture({ texture: this.currentModel.heightmapTextureB }, debugResults.heights, { bytesPerRow: this.currentModel.gridSize * 4 }, { width: this.currentModel.gridSize, height: this.currentModel.gridSize });
-
-            // Manually calculate metrics from the returned heights.
-            const metrics = this.currentModel.calculateErosionMetrics(debugResults.heights);
-            return { ...metrics, heights: debugResults.heights };
+            this.simulationCapture.addFrame(this.totalErosionIterations, results.capturedData);
+        } else {
+            // If not capturing, or not using the debug model, run a normal single iteration.
+            results = await this.currentModel.runErosion(1, erosionParams, this.currentErosionModel);
         }
 
-        // If not capturing, just run a normal single iteration.
-        const results = await this.currentModel.runErosion(1, erosionParams, this.currentErosionModel);
-        // The runErosion method already commits the data to the GPU, so we don't need to do it again here.
+        const metrics = this.currentModel.calculateErosionMetrics(results.heights);
         return results;
     }
 

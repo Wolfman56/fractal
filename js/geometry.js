@@ -115,7 +115,7 @@ function applyStitching(baseIndices, gridSize, stitchTop, stitchBottom, stitchLe
  * @param {number} [globalOffset=0] - A global Y-offset to apply to all vertices.
  * @returns {{positions: number[], normals: number[], colors: number[], indices: number[], yValues: number[]}}
  */
-export function createTileGeometry(heights, params, neighborLODs, tileLOD, globalOffset = 0) {
+export function createTileGeometry(heights, params, waterHeights, neighborLODs, tileLOD, globalOffset = 0) {
     const gridSize = Math.sqrt(heights.length);
     const positions = [];
     const normals = [];
@@ -126,31 +126,43 @@ export function createTileGeometry(heights, params, neighborLODs, tileLOD, globa
     for (let y = 0; y < gridSize; y++) {
         for (let x = 0; x < gridSize; x++) {
             const idx = y * gridSize + x;
-            let height = (heights[idx] * params.heightMultiplier) - globalOffset;
-            yValues.push(height);
+            const terrainHeight = (heights[idx] * params.heightMultiplier) - globalOffset;
+            const waterDepth = waterHeights ? (waterHeights[idx] * params.heightMultiplier) : 0;
+
+            let finalHeight = terrainHeight;
+            let finalNormal = [];
+            let finalColor = [];
+
+            if (waterDepth > 0.001) {
+                finalHeight = terrainHeight + waterDepth;
+                finalNormal = [0, 1, 0]; // Flat water surface
+                finalColor = [0.2, 0.5, 0.8]; // Blue for water
+            } else {
+                const normHeight = heights[idx];
+                if (normHeight < 0.2) { finalColor = [0.0, 0.0, 1.0]; }
+                else if (normHeight < 0.4) { finalColor = [0.0, 0.4, 0.0]; }
+                else if (normHeight < 0.6) { finalColor = [0.2, 0.8, 0.2]; }
+                else if (normHeight < 0.7) { finalColor = [0.6, 0.4, 0.2]; }
+                else if (normHeight < 0.8) { finalColor = [0.4, 0.2, 0.0]; }
+                else if (normHeight < 0.9) { finalColor = [0.5, 0.5, 0.5]; }
+                else { finalColor = [1.0, 1.0, 1.0]; }
+
+                const h = (x, y) => heights[Math.max(0, Math.min(gridSize - 1, y)) * gridSize + Math.max(0, Math.min(gridSize - 1, x))] * params.heightMultiplier;
+                const hL = h(x - 1, y);
+                const hR = h(x + 1, y);
+                const hD = h(x, y - 1);
+                const hU = h(x, y + 1);
+                const n = [hL - hR, 4.0 / (gridSize - 1), hD - hU];
+                const len = Math.hypot(...n) || 1;
+                finalNormal = [n[0] / len, n[1] / len, n[2] / len];
+            }
+
+            yValues.push(finalHeight);
             const nx = x / (gridSize - 1) - 0.5;
             const ny = y / (gridSize - 1) - 0.5;
-            positions.push(nx * 2, height, ny * 2);
-            
-            let color;
-            const normHeight = heights[idx];
-            if (normHeight < 0.2) { color = [0.0, 0.0, 1.0]; }
-            else if (normHeight < 0.4) { color = [0.0, 0.4, 0.0]; }
-            else if (normHeight < 0.6) { color = [0.2, 0.8, 0.2]; }
-            else if (normHeight < 0.7) { color = [0.6, 0.4, 0.2]; }
-            else if (normHeight < 0.8) { color = [0.4, 0.2, 0.0]; }
-            else if (normHeight < 0.9) { color = [0.5, 0.5, 0.5]; }
-            else { color = [1.0, 1.0, 1.0]; }
-            colors.push(...color);
-            
-            const h = (x, y) => heights[Math.max(0, Math.min(gridSize - 1, y)) * gridSize + Math.max(0, Math.min(gridSize - 1, x))] * params.heightMultiplier;
-            const hL = h(x - 1, y);
-            const hR = h(x + 1, y);
-            const hD = h(x, y - 1);
-            const hU = h(x, y + 1);
-            const n = [hL - hR, 4.0 / (gridSize - 1), hD - hU];
-            const len = Math.hypot(...n) || 1;
-            normals.push(n[0] / len, n[1] / len, n[2] / len);
+            positions.push(nx * 2, finalHeight, ny * 2);
+            colors.push(...finalColor);
+            normals.push(...finalNormal);
         }
     }
 

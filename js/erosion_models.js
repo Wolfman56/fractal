@@ -275,11 +275,11 @@ export class HydraulicErosionModelDebug extends HydraulicErosionModel {
         await Promise.all(Object.values(stagingBuffers).map(b => b.mapAsync(GPUMapMode.READ)));
 
         const analyzeBuffer = (buffer) => {
-            const data = new Float32Array(buffer.getMappedRange());
+            const mappedRange = buffer.getMappedRange();
+            const data = new Float32Array(mappedRange);
             const dataLength = data.length;
             let sum = 0, min = Infinity, max = -Infinity, nonZeroCount = 0;
             for (const v of data) { sum += v; if (v < min) min = v; if (v > max) max = v; if (Math.abs(v) > 1e-9) nonZeroCount++; }
-            buffer.unmap();
             return { sum: sum.toFixed(4), min: min.toFixed(4), max: max.toFixed(4), avg: (sum / dataLength).toFixed(4), nonZero: `${nonZeroCount} / ${dataLength}` };
         };
 
@@ -288,8 +288,9 @@ export class HydraulicErosionModelDebug extends HydraulicErosionModel {
         };
 
         const finalHeights = new Float32Array(stagingBuffers.finalTerrain.getMappedRange()).slice();
-        stagingBuffers.finalTerrain.unmap();
+        const finalWater = new Float32Array(stagingBuffers.waterEvaporation.getMappedRange()).slice();
 
+        Object.values(stagingBuffers).forEach(b => b.unmap());
         Object.values(stagingBuffers).forEach(b => b.destroy());
 
         // After running the debug step, we need to swap the main state textures
@@ -297,7 +298,7 @@ export class HydraulicErosionModelDebug extends HydraulicErosionModel {
         [this.waterTextureA, this.waterTextureB] = [this.waterTextureB, this.waterTextureA];
         [this.sedimentTextureA, this.sedimentTextureB] = [this.sedimentTextureB, this.sedimentTextureA];
 
-        return { capturedData, heights: finalHeights };
+        return { capturedData, heights: finalHeights, waterHeights: finalWater };
     }
 }
 
