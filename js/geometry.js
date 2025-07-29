@@ -6,190 +6,205 @@
 const indexCache = new Map();
 
 /**
- * Generates a simple, non-stitched index buffer for a grid.
- * @param {number} gridSize The size of the grid.
- * @returns {number[]} The generated indices.
+ * Subsamples a high-resolution heightmap to create a lower-resolution one.
+ * @param {Float32Array} heights - The original high-resolution height data.
+ * @param {Float32Array|null} waterHeights - The original high-resolution water data.
+ * @param {number} fullGridSize - The grid size of the original data.
+ * @param {number} step - The step rate for subsampling (e.g., 2 for LOD 1).
+ * @returns {{geoGridSize: number, geoHeights: Float32Array, geoWaterHeights: Float32Array|null}}
  */
-function generateBaseIndices(gridSize) {
-    const indices = [];
-    for (let y = 0; y < gridSize - 1; y++) {
-        for (let x = 0; x < gridSize - 1; x++) {
-            const tl = y * gridSize + x;
-            const tr = y * gridSize + x + 1;
-            const bl = (y + 1) * gridSize + x;
-            const br = (y + 1) * gridSize + x + 1;
-            // Correct CCW winding for our coordinate system.
-            indices.push(tl, tr, br, tl, br, bl);
+function subsample(heights, waterHeights, fullGridSize, step) {
+    const geoGridSize = (fullGridSize - 1) / step + 1;
+    const newSize = geoGridSize * geoGridSize;
+    const geoHeights = new Float32Array(newSize);
+    const geoWaterHeights = waterHeights ? new Float32Array(newSize) : null;
+
+    for (let y = 0; y < geoGridSize; y++) {
+        for (let x = 0; x < geoGridSize; x++) {
+            const highResIdx = (y * step) * fullGridSize + (x * step);
+            const lowResIdx = y * geoGridSize + x;
+            geoHeights[lowResIdx] = heights[highResIdx];
+            if (geoWaterHeights) {
+                geoWaterHeights[lowResIdx] = waterHeights[highResIdx];
+            }
         }
     }
-    return indices;
+    return { geoGridSize, geoHeights, geoWaterHeights };
 }
-
-/**
- * Modifies a base index buffer to apply seam stitching.
- * This is the "modifier plan" pass.
- * @param {number[]} baseIndices The non-stitched index buffer.
- * @param {number} gridSize The size of the grid.
- * @param {boolean} stitchTop - Whether to stitch the top edge.
- * @param {boolean} stitchBottom - Whether to stitch the bottom edge.
- * @param {boolean} stitchLeft - Whether to stitch the left edge.
- * @param {boolean} stitchRight - Whether to stitch the right edge.
- * @returns {number[]} The modified, stitched indices.
- */
-function applyStitching(baseIndices, gridSize, stitchTop, stitchBottom, stitchLeft, stitchRight) {
-    const vertexMap = new Map(); // Map from a T-junction vertex to its stable pivot.
-
-    // --- Create the "Modifier Plan" by populating the vertexMap ---
-    // The core idea is to "weld" the odd-numbered vertices on a stitched edge
-    // to their preceding even-numbered vertex.
-
-    // Top edge (y = gridSize - 1, which is the top row in our coordinate system)
-    if (stitchTop) {
-        for (let x = 1; x < gridSize; x += 2) {
-            const tJunctionIndex = (gridSize - 1) * gridSize + x;
-            const pivotIndex = (gridSize - 1) * gridSize + (x - 1);
-            vertexMap.set(tJunctionIndex, pivotIndex);
-        }
-    }
-
-    // Bottom edge (y = 0)
-    if (stitchBottom) {
-        for (let x = 1; x < gridSize; x += 2) {
-            const tJunctionIndex = x;
-            const pivotIndex = x - 1;
-            vertexMap.set(tJunctionIndex, pivotIndex);
-        }
-    }
-
-    // Left edge (x = 0)
-    if (stitchLeft) {
-        for (let y = 1; y < gridSize; y += 2) {
-            const tJunctionIndex = y * gridSize;
-            const pivotIndex = (y - 1) * gridSize;
-            vertexMap.set(tJunctionIndex, pivotIndex);
-        }
-    }
-
-    // Right edge (x = gridSize - 1)
-    if (stitchRight) {
-        for (let y = 1; y < gridSize; y += 2) {
-            const tJunctionIndex = y * gridSize + (gridSize - 1);
-            const pivotIndex = (y - 1) * gridSize + (gridSize - 1);
-            vertexMap.set(tJunctionIndex, pivotIndex);
-        }
-    }
-
-    // --- Apply the Modifier Plan ---
-    if (vertexMap.size === 0) {
-        return baseIndices; // No modifications needed
-    }
-
-    const stitchedIndices = new (baseIndices.length > 65535 ? Uint32Array : Uint16Array)(baseIndices.length);
-    for (let i = 0; i < baseIndices.length; i++) {
-        const originalIndex = baseIndices[i];
-        stitchedIndices[i] = vertexMap.get(originalIndex) ?? originalIndex;
-    }
-
-    // --- Final Pass: Remove Degenerate Triangles ---
-    // The welding process creates triangles with duplicate indices (e.g., [1, 2, 1]), which have no area.
-    const finalIndices = [];
-    for (let i = 0; i < stitchedIndices.length; i += 3) {
-        const iA = stitchedIndices[i];
-        const iB = stitchedIndices[i + 1];
-        const iC = stitchedIndices[i + 2];
-        if (iA !== iB && iA !== iC && iB !== iC) {
-            finalIndices.push(iA, iB, iC);
-        }
-    }
-
-    return finalIndices;
-}
-
 
 /**
  * Generates the vertex data for a single terrain tile, including seam stitching for different LODs.
  * @param {Float32Array} heights - The normalized height data for the tile.
  * @param {object} params - Global terrain parameters (gridSize, heightMultiplier).
+ * @param {Float32Array|null} waterHeights - The normalized water height data for the tile.
  * @param {object} neighborLODs - LODs of the four neighboring tiles.
  * @param {number} tileLOD - The LOD of the current tile.
- * @param {number} [globalOffset=0] - A global Y-offset to apply to all vertices.
- * @returns {{positions: number[], normals: number[], colors: number[], indices: number[], yValues: number[]}}
+ * @returns {{positions: number[], normals: number[], indices: number[], yValues: number[], normalizedHeights: number[], isWater: number[], waterDepths: number[]}}
  */
-export function createTileGeometry(heights, params, waterHeights, neighborLODs, tileLOD, globalOffset = 0) {
-    const gridSize = Math.sqrt(heights.length);
+export function createTileGeometry(heights, params, waterHeights, neighborLODs, tileLOD) {
+    const fullGridSize = Math.sqrt(heights.length);
+    const step = 2 ** tileLOD;
+
+    // If we are creating a lower-LOD mesh, we must subsample the input heightmaps.
+    // The rest of the function will then operate on these smaller, self-contained grids.
+    const { geoGridSize: gridSize, geoHeights, geoWaterHeights } = (step > 1)
+        ? subsample(heights, waterHeights, fullGridSize, step)
+        : { geoGridSize: fullGridSize, geoHeights: heights, geoWaterHeights: waterHeights };
+
     const positions = [];
     const normals = [];
-    const colors = [];
     const yValues = [];
+    const normalizedHeights = [];
+    const isWater = [];
+    const waterDepths = [];
+    let indices = [];
 
     // --- Pass 1: Generate Vertex Attributes ---
     for (let y = 0; y < gridSize; y++) {
         for (let x = 0; x < gridSize; x++) {
             const idx = y * gridSize + x;
-            const terrainHeight = (heights[idx] * params.heightMultiplier) - globalOffset;
-            const waterDepth = waterHeights ? (waterHeights[idx] * params.heightMultiplier) : 0;
+            const terrainHeightNormalized = geoHeights[idx];
+            const erosionWaterNormalized = geoWaterHeights ? geoWaterHeights[idx] : 0;
 
-            let finalHeight = terrainHeight;
-            let finalNormal = [];
-            let finalColor = [];
+            const seaLevelNorm = params.seaLevel ?? 0.0;
 
-            if (waterDepth > 0.001) {
-                finalHeight = terrainHeight + waterDepth;
-                finalNormal = [0, 1, 0]; // Flat water surface
-                finalColor = [0.2, 0.5, 0.8]; // Blue for water
-            } else {
-                const normHeight = heights[idx];
-                if (normHeight < 0.2) { finalColor = [0.0, 0.0, 1.0]; }
-                else if (normHeight < 0.4) { finalColor = [0.0, 0.4, 0.0]; }
-                else if (normHeight < 0.6) { finalColor = [0.2, 0.8, 0.2]; }
-                else if (normHeight < 0.7) { finalColor = [0.6, 0.4, 0.2]; }
-                else if (normHeight < 0.8) { finalColor = [0.4, 0.2, 0.0]; }
-                else if (normHeight < 0.9) { finalColor = [0.5, 0.5, 0.5]; }
-                else { finalColor = [1.0, 1.0, 1.0]; }
+            // The terrain height is now relative to the sea level.
+            const terrainHeight = (terrainHeightNormalized - seaLevelNorm) * params.heightMultiplier;
 
-                const h = (x, y) => heights[Math.max(0, Math.min(gridSize - 1, y)) * gridSize + Math.max(0, Math.min(gridSize - 1, x))] * params.heightMultiplier;
-                const hL = h(x - 1, y);
-                const hR = h(x + 1, y);
-                const hD = h(x, y - 1);
-                const hU = h(x, y + 1);
-                const n = [hL - hR, 4.0 / (gridSize - 1), hD - hU];
-                const len = Math.hypot(...n) || 1;
-                finalNormal = [n[0] / len, n[1] / len, n[2] / len];
-            }
+            // The water surface is the higher of the dynamic water or the static sea level.
+            const waterSurfaceHeight = (Math.max(terrainHeightNormalized + erosionWaterNormalized, seaLevelNorm) - seaLevelNorm) * params.heightMultiplier;
+
+            // The final depth is the difference between the surface and the land.
+            const waterDepth = waterSurfaceHeight - terrainHeight;
+            waterDepths.push(waterDepth);
+            normalizedHeights.push(terrainHeightNormalized);
+
+            const hasWater = waterDepth > 0.001;
+            isWater.push(hasWater ? 1.0 : 0.0);
+
+            // The geometry's height is ALWAYS the terrain height to preserve underwater details.
+            const finalHeight = terrainHeight;
+
+            // The geometry's normal is ALWAYS calculated from the terrain slope.
+            // For accurate normals on low-LOD meshes, we must sample the original, full-resolution heightmap.
+            const h = (sampleX, sampleY) => {
+                const fullResX = Math.max(0, Math.min(fullGridSize - 1, sampleX * step));
+                const fullResY = Math.max(0, Math.min(fullGridSize - 1, sampleY * step));
+                return heights[fullResY * fullGridSize + fullResX] * params.heightMultiplier;
+            };
+            const n = [h(x - 1, y) - h(x + 1, y), 4.0 / (gridSize - 1), h(x, y - 1) - h(x, y + 1)];
+            const len = Math.hypot(...n) || 1;
+            const finalNormal = [n[0] / len, n[1] / len, n[2] / len];
 
             yValues.push(finalHeight);
             const nx = x / (gridSize - 1) - 0.5;
             const ny = y / (gridSize - 1) - 0.5;
             positions.push(nx * 2, finalHeight, ny * 2);
-            colors.push(...finalColor);
             normals.push(...finalNormal);
         }
     }
 
-    // --- Pass 2: Generate and Modify Indices ---
+    // --- Pass 2: Generate Indices with Stitching ---
     const stitchTop = neighborLODs.top !== -1 && neighborLODs.top > tileLOD;
     const stitchBottom = neighborLODs.bottom !== -1 && neighborLODs.bottom > tileLOD;
     const stitchLeft = neighborLODs.left !== -1 && neighborLODs.left > tileLOD;
     const stitchRight = neighborLODs.right !== -1 && neighborLODs.right > tileLOD;
 
-    let cacheKey = `${gridSize}`;
-    if (stitchTop) cacheKey += '-T';
-    if (stitchBottom) cacheKey += '-B';
-    if (stitchLeft) cacheKey += '-L';
-    if (stitchRight) cacheKey += '-R';
+    const cacheKey = `${gridSize}-${stitchTop}-${stitchBottom}-${stitchLeft}-${stitchRight}`;
 
-    let indices;
     if (indexCache.has(cacheKey)) {
         indices = indexCache.get(cacheKey);
     } else {
-        const baseIndices = generateBaseIndices(gridSize);
-        indices = applyStitching(baseIndices, gridSize, stitchTop, stitchBottom, stitchLeft, stitchRight);
-        console.log(`%c--- Index Generation for pattern: ${cacheKey} ---`, 'color: #569cd6; font-weight: bold;');
-        console.log('Base Indices:', baseIndices);
-        console.log('Stitched Indices:', indices);
+        let y = 0;
+        while (y < gridSize - 1) {
+            let isTallRow = false;
+            let x = 0;
+            while (x < gridSize - 1) {
+
+                // Determine if the current 2x2 block is on a stitch boundary.
+                const onTopBoundary = stitchTop && y === gridSize - 2;
+                const onBottomBoundary = stitchBottom && y === 0;
+                const onLeftBoundary = stitchLeft && x === 0;
+                const onRightBoundary = stitchRight && x === gridSize - 2;
+
+                // The stitching logic processes 2x2 blocks of quads. To prevent reading out of
+                // bounds on the top and right edges, we shift the block's origin inward.
+                let blockY = y;
+                if (onTopBoundary) blockY = y - 1;
+                let blockX = x;
+                if (onRightBoundary) blockX = x - 1;
+
+                const p = (dy, dx) => (blockY + dy) * gridSize + (blockX + dx);
+
+                if (onTopBoundary || onBottomBoundary || onLeftBoundary || onRightBoundary) {
+                    isTallRow = true;
+                }
+
+                // --- Block-based Stitching ---
+                // The logic checks for the most complex case (corners) first, then edges,
+                // then falls back to a standard quad. It processes blocks of quads (2x2, 2x1, or 1x2)
+                // and advances the loop counters accordingly. By shifting the block for top/right
+                // edges, the internal logic becomes symmetrical and avoids out-of-bounds access.
+
+                if ((onTopBoundary || onBottomBoundary) && (onLeftBoundary || onRightBoundary)) { // 2x2 Corner block
+                    const pivot = p(1, 1);
+                    // The 8 high-res vertices forming the perimeter of the 2x2 block
+                    const p00=p(0,0), p01=p(0,1), p02=p(0,2);
+                    const p10=p(1,0),             p12=p(1,2);
+                    const p20=p(2,0), p21=p(2,1), p22=p(2,2);
+
+                    // Create an 8-triangle fan from the pivot, decimating vertices on the boundary.
+                    const v00 = onBottomBoundary && onLeftBoundary ? p(0,0) : p00;
+                    const v01 = onBottomBoundary ? p(0,0) : p01;
+                    const v02 = onBottomBoundary && onRightBoundary ? p(0,2) : p02;
+                    const v10 = onLeftBoundary ? p(0,0) : p10;
+                    const v12 = onRightBoundary ? p(0,2) : p12;
+                    const v20 = onTopBoundary && onLeftBoundary ? p(2,0) : p20;
+                    const v21 = onTopBoundary ? p(2,0) : p21;
+                    const v22 = onTopBoundary && onRightBoundary ? p(2,2) : p22;
+
+                    indices.push(v00, v10, pivot);
+                    indices.push(v10, v20, pivot);
+                    indices.push(v20, v21, pivot);
+                    indices.push(v21, v22, pivot);
+                    indices.push(v22, v12, pivot);
+                    indices.push(v12, v02, pivot);
+                    indices.push(v02, v01, pivot);
+                    indices.push(v01, v00, pivot);
+
+                    x += 2;
+                } else if (onTopBoundary || onBottomBoundary) { // 2x1 Horizontal edge block
+                    const pivot = p(1, 1);
+                    const p00=p(0,0), p01=p(0,1), p02=p(0,2);
+                    const p10=p(1,0),             p12=p(1,2);
+                    const p20=p(2,0), p21=p(2,1), p22=p(2,2);
+
+                    indices.push(p10, p20, p21,  p10, p21, pivot);
+                    indices.push(p12, pivot, p21,  p12, p21, p22);
+                    indices.push(p00, p10, pivot,  p00, pivot, p01);
+                    indices.push(p02, p01, pivot,  p02, pivot, p12);
+                    x += 2;
+                } else if (onLeftBoundary || onRightBoundary) { // 1x2 Vertical edge block
+                    const pivot = p(1, 1);
+                    const p00=p(0,0), p01=p(0,1), p02=p(0,2);
+                    const p10=p(1,0),             p12=p(1,2);
+                    const p20=p(2,0), p21=p(2,1), p22=p(2,2);
+
+                    indices.push(p01, p12, p22,  p01, p22, p21,  p01, p21, p02);
+                    indices.push(p00, p10, pivot,  p10, p20, pivot,  p20, p21, pivot,  p21, p12, pivot,  p12, p02, pivot,  p02, p01, pivot);
+                    x += 1;
+                } else {
+                    // 1x1 Default block (standard quad)
+                    indices.push(p(0,0), p(0,1), p(1,1),  p(0,0), p(1,1), p(1,0));
+                    x += 1;
+                }
+            }
+            // Advance y by 2 if the row contained any "tall" stitched blocks, otherwise by 1.
+            y += isTallRow ? 2 : 1;
+        }
         indexCache.set(cacheKey, indices);
         console.log(`%cGenerated and cached new index pattern: ${cacheKey}`, 'color: #9cdcfe;');
     }
 
-    return { positions, normals, colors, indices, yValues };
+    return { positions, normals, indices, yValues, normalizedHeights, isWater, waterDepths };
 }

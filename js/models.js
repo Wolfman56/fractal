@@ -1,4 +1,5 @@
-import { withTimeout } from './utils.js';
+import { withTimeout, getPaddedByteRange, padBuffer } from './utils.js';
+import mat4 from './mat4.js';
 
 /**
  * The base class for all data models. It handles the common GPU resources and
@@ -37,40 +38,72 @@ export class BaseModel {
         [this.computeUniformBuffer, this.computeMinMaxBuffer, this.erosionParamsBuffer,
          this.computeOutputBuffer, this.computeStagingBuffer, this.computeMinMaxStagingBuffer, this.heightmapTextureA,
          this.heightmapTextureB].forEach(r => r?.destroy());
-
-        this.computeUniformBuffer = this.device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        
+        // The uniform struct in the shaders has padding and alignment requirements that result in a 56-byte size.
+        this.computeUniformBuffer = this.device.createBuffer({ size: 56, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         this.computeMinMaxBuffer = this.device.createBuffer({ size: 8, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
-        this.computeOutputBuffer = this.device.createBuffer({ size: gridSize * gridSize * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
-        this.computeStagingBuffer = this.device.createBuffer({ size: this.computeOutputBuffer.size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+        this.computeOutputBuffer = this.device.createBuffer({ size: gridSize * gridSize * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+        const { bufferSize } = getPaddedByteRange(gridSize, gridSize, 4);
+        this.computeStagingBuffer = this.device.createBuffer({ size: bufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
         this.computeMinMaxStagingBuffer = this.device.createBuffer({ size: 8, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
 
         const r32fDescriptor = {
             size: [gridSize, gridSize],
             format: 'r32float',
-            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC,
+            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC,
         };
 
         this.heightmapTextureA = this.device.createTexture(r32fDescriptor);
         this.heightmapTextureB = this.device.createTexture(r32fDescriptor);
 
-        // For simplicity, we'll create the bind groups just-in-time in the runErosion method,
-        // as the bindings change with every pass and ping-pong swap.
+        // If the pipeline failed to create (e.g., shader not found), it will be null.
+        // We should not attempt to create a bind group for it.
+        if (this.shaderStrategy.computePipeline) {
+            this.computeBindGroup = this.device.createBindGroup({
+                layout: this.shaderStrategy.computePipeline.getBindGroupLayout(0),
+                entries: [
+                    { binding: 0, resource: { buffer: this.computeUniformBuffer } },
+                    { binding: 1, resource: { buffer: this.computeOutputBuffer } },
+                    { binding: 2, resource: { buffer: this.computeMinMaxBuffer } },
+                ],
+            });
+        } else {
+            // Log a warning. The model will be unusable but won't crash the whole app
+            // during the resource creation loop.
+            console.warn(`Compute pipeline for strategy '${this.shaderStrategy.name}' not available. Skipping bind group creation.`);
+            this.computeBindGroup = null;
+        }
+    }
 
-        this.computeBindGroup = this.device.createBindGroup({
-            layout: this.shaderStrategy.computePipeline.getBindGroupLayout(0),
-            entries: [
-                { binding: 0, resource: { buffer: this.computeUniformBuffer } },
-                { binding: 1, resource: { buffer: this.computeOutputBuffer } },
-                { binding: 2, resource: { buffer: this.computeMinMaxBuffer } },
-            ],
-        });
+    /**
+     * Extracts and un-pads data from a staging buffer that was used for a texture-to-buffer copy.
+     * @param {ArrayBuffer} mappedRange The mapped range of the staging buffer.
+     * @param {number} width The width of the original texture.
+     * @param {number} height The height of the original texture.
+     * @param {number} bytesPerRow The padded bytes per row used in the copy.
+     * @returns {Float32Array | null} The compact, un-padded data.
+     */
+    _unpadBuffer(mappedRange, width, height, bytesPerRow) {
+        if (!mappedRange || mappedRange.byteLength === 0) return null;
+        const dest = new Float32Array(width * height);
+        const srcView = new Uint8Array(mappedRange);
+        for (let y = 0; y < height; y++) {
+            const srcOffset = y * bytesPerRow;
+            const dstOffset = y * width; // in floats
+            dest.set(new Float32Array(srcView.buffer, srcView.byteOffset + srcOffset, width), dstOffset);
+        }
+        return dest;
     }
 
     async generateTileData(params, tileParams) {
-        if (!this.shaderStrategy) throw new Error("Shader strategy not set in Model.");
+        if (!this.shaderStrategy || !this.shaderStrategy.computePipeline || !this.computeBindGroup) {
+            console.error(`Cannot generate tile data for strategy '${this.shaderStrategy?.name}' because its pipeline or bind group is invalid. Check for shader compilation errors.`);
+            // Return a flat, empty heightmap to prevent crashes downstream.
+            return new Float32Array(params.gridSize * params.gridSize).fill(0);
+        }
 
         this.lastGeneratedParams = params;
-        const uniformArrayBuffer = new ArrayBuffer(48);
+        const uniformArrayBuffer = new ArrayBuffer(56);
         this.shaderStrategy.prepareUniforms(uniformArrayBuffer, params, tileParams);
 
         this.device.queue.writeBuffer(this.computeUniformBuffer, 0, uniformArrayBuffer);
@@ -137,34 +170,57 @@ export class BaseModel {
             this.shaderStrategy.globalMax = newMax;
         }
 
-        const heights = new Float32Array(this.computeStagingBuffer.getMappedRange()).slice();
+        const { bytesPerRow: paddedBytesPerRow } = getPaddedByteRange(this.gridSize, this.gridSize, 4);
+        const heights = this._unpadBuffer(this.computeStagingBuffer.getMappedRange(), this.gridSize, this.gridSize, paddedBytesPerRow);
         this.computeStagingBuffer.unmap();
         
         this.lastGeneratedHeightmap = heights;
         this.originalHeightmap = heights.slice(); // Store a pristine copy for erosion measurement
         this.erosionFrameCounter = 0;
-        this.device.queue.writeTexture({ texture: this.heightmapTextureA }, heights, { bytesPerRow: this.gridSize * 4 }, { width: this.gridSize, height: this.gridSize });
+
+        // For writeTexture, the source buffer layout must have bytesPerRow aligned to 256.
+        const { paddedBuffer, bytesPerRow } = padBuffer(heights, this.gridSize, this.gridSize);
+        this.device.queue.writeTexture({ texture: this.heightmapTextureA }, paddedBuffer, { bytesPerRow }, { width: this.gridSize, height: this.gridSize });
 
         return heights;
     }
 
     async runErosion(iterations, params, erosionModel) {
+        // The terrain model and erosion model now use the same power-of-two grid size.
+        const erosionGridSize = erosionModel.gridSize;
+        if (!erosionGridSize || erosionGridSize !== this.gridSize) {
+            console.warn("Erosion model and terrain model grid sizes are incompatible or uninitialized. Aborting erosion.");
+            return { heights: this.lastGeneratedHeightmap, waterHeights: null, erosionAmount: 0, depositionAmount: 0 };
+        }
+
+        const { bytesPerRow, bufferSize } = getPaddedByteRange(erosionGridSize, erosionGridSize, 4);
+
         const encoder = this.device.createCommandEncoder();
 
-        // Delegate the actual erosion work to the selected erosion model.
-        erosionModel.run(encoder, iterations, params, {
-            read: this.heightmapTextureA,
-            write: this.heightmapTextureB
-        });
+        // 1. Copy the full terrain into the erosion model's input texture.
+        encoder.copyTextureToTexture(
+            { texture: this.heightmapTextureA },
+            { texture: erosionModel.terrainTextureA },
+            { width: erosionGridSize, height: erosionGridSize }
+        );
 
-        // The erosion model handles the ping-ponging. After N iterations, we determine the final texture.
-        const finalTexture = (iterations % 2 === 0) ? this.heightmapTextureA : this.heightmapTextureB;
+        // 2. Run the self-contained erosion simulation.
+        erosionModel.run(encoder, iterations, params);
+
+        // 3. Copy the result back into the main terrain texture.
+        const finalErodedTexture = erosionModel.getFinalTerrainTexture(iterations);
+        encoder.copyTextureToTexture(
+            { texture: finalErodedTexture },
+            { texture: this.heightmapTextureA },
+            { width: erosionGridSize, height: erosionGridSize }
+        );
+
+        // 4. Read back the heightmap and water map for display.
         const finalWaterTexture = (iterations % 2 === 0) ? erosionModel.waterTextureA : erosionModel.waterTextureB;
-
-        const waterStagingBuffer = this.device.createBuffer({ size: this.computeStagingBuffer.size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-        encoder.copyTextureToBuffer({ texture: finalTexture }, { buffer: this.computeStagingBuffer, bytesPerRow: this.gridSize * 4 }, { width: this.gridSize, height: this.gridSize });
+        const waterStagingBuffer = this.device.createBuffer({ size: bufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+        encoder.copyTextureToBuffer({ texture: this.heightmapTextureA }, { buffer: this.computeStagingBuffer, bytesPerRow }, { width: this.gridSize, height: this.gridSize });
         if (finalWaterTexture) {
-            encoder.copyTextureToBuffer({ texture: finalWaterTexture }, { buffer: waterStagingBuffer, bytesPerRow: this.gridSize * 4 }, { width: this.gridSize, height: this.gridSize });
+            encoder.copyTextureToBuffer({ texture: finalWaterTexture }, { buffer: waterStagingBuffer, bytesPerRow }, { width: erosionGridSize, height: erosionGridSize });
         }
 
         this.device.queue.submit([encoder.finish()]);
@@ -175,9 +231,11 @@ export class BaseModel {
         }
         await Promise.all(mapPromises);
 
-        const erodedHeights = new Float32Array(this.computeStagingBuffer.getMappedRange()).slice();
+        const erodedHeights = this._unpadBuffer(this.computeStagingBuffer.getMappedRange(), this.gridSize, this.gridSize, bytesPerRow);
         this.computeStagingBuffer.unmap();
-        const waterHeights = finalWaterTexture ? new Float32Array(waterStagingBuffer.getMappedRange()).slice() : null;
+
+        const waterHeights = this._unpadBuffer(finalWaterTexture ? waterStagingBuffer.getMappedRange() : null, erosionGridSize, erosionGridSize, bytesPerRow);
+        if (finalWaterTexture) waterStagingBuffer.unmap();
         waterStagingBuffer.destroy();
 
         this.lastGeneratedHeightmap = erodedHeights;
@@ -203,8 +261,10 @@ export class BaseModel {
         }
 
         // Copy the final eroded heights back to both terrain textures to ensure consistency for the next erosion run
-        this.device.queue.writeTexture({ texture: this.heightmapTextureA }, erodedHeights, { bytesPerRow: this.gridSize * 4 }, { width: this.gridSize, height: this.gridSize });
-        this.device.queue.writeTexture({ texture: this.heightmapTextureB }, erodedHeights, { bytesPerRow: this.gridSize * 4 }, { width: this.gridSize, height: this.gridSize });
+        const { paddedBuffer: paddedHeights, bytesPerRow: paddedBPR } = padBuffer(erodedHeights, this.gridSize, this.gridSize);
+        const textureSize = { width: this.gridSize, height: this.gridSize };
+        this.device.queue.writeTexture({ texture: this.heightmapTextureA }, paddedHeights, { bytesPerRow: paddedBPR }, textureSize);
+        this.device.queue.writeTexture({ texture: this.heightmapTextureB }, paddedHeights, { bytesPerRow: paddedBPR }, textureSize);
 
         return { heights: erodedHeights, waterHeights, erosionAmount: totalErosion, depositionAmount: totalDeposition };
     }
@@ -259,30 +319,39 @@ export class TiledLODModel extends BaseModel {
     }
 
     async update(params, view, needsNormalizationReset = false) {
+        // --- Tiled LOD with Full-Detail Data Generation ---
+        // This model now generates full-resolution data (LOD 0) for all tiles.
+        // The Level of Detail (LOD) is now used purely for display, determining
+        // the mesh resolution for each tile, not the underlying data resolution.
+        // This is a prerequisite for features like tiled erosion.
+
+        // 1. Define tile coordinates and their *display* LODs.
         const tileCoords = [];
         for (let x = -1; x <= 1; x++) {
             for (let z = -1; z <= 1; z++) {
-                const lod = 0 //(x === -1 && z === -1) ? 0 : 1;
+                const lod = Math.max(Math.abs(x), Math.abs(z));
                 tileCoords.push({ x, z, lod });
             }
         }
         view.setTiles(tileCoords);
 
-        const lodMap = new Map(tileCoords.map(c => [`${c.x},${c.z}`, c.lod]));
-        const getNeighborLOD = (x, z) => lodMap.has(`${x},${z}`) ? lodMap.get(`${x},${z}`) : -1;
+        // 2. All tiles have the same world size because data is generated at max detail (LOD 0).
+        // The origin calculation is now a simple, uniform grid.
+        const tileWorldSize = (params.gridSize - 1);
 
+        // 3. Generate all tile data at full resolution (LOD 0).
         const tileDataList = [];
         let globalMin = Infinity, globalMax = -Infinity;
-        const allYValues = [];
 
         for (const coord of tileCoords) {
+            const key = `${coord.x},${coord.z}`;
             const tileParams = {
-                origin: { x: coord.x * (params.gridSize - 1), y: coord.z * (params.gridSize - 1) },
-                lod: coord.lod,
+                origin: { x: coord.x * tileWorldSize, y: coord.z * tileWorldSize },
+                lod: 0, // CRITICAL: Always generate data at LOD 0 for full detail.
             };
             const heights = await this.generateTileData(params, tileParams);
             if (heights) {
-                tileDataList.push({ key: `${coord.x},${coord.z}`, heights });
+                tileDataList.push({ key, heights, coord });
                 for (const h of heights) {
                     if (h < globalMin) globalMin = h;
                     if (h > globalMax) globalMax = h;
@@ -295,25 +364,32 @@ export class TiledLODModel extends BaseModel {
             this.validatedGridSize = params.gridSize;
         }
 
+        // 4. Create meshes. The geometry generator will subsample the full-res data
+        // based on the *display* LOD of each tile.
         const range = globalMax - globalMin;
-        for (const tileData of tileDataList) {
-            for (const h of tileData.heights) {
-                allYValues.push(h * params.heightMultiplier);
-            }
-        }
-        allYValues.sort((a, b) => a - b);
-        const globalOffset = allYValues[Math.floor(allYValues.length * 0.05)] || 0;
+        const lodMap = new Map(tileCoords.map(c => [`${c.x},${c.z}`, c.lod]));
 
-        for (const { key, heights } of tileDataList) {
-            const [x, z] = key.split(',').map(Number);
+        for (const { key, heights, coord } of tileDataList) {
+            const { x, z } = coord;
+            const getNeighborLOD = (dx, dz) => lodMap.get(`${x+dx},${z+dz}`) ?? -1;
+
             const neighborLODs = {
-                top: getNeighborLOD(x, z + 1),
-                bottom: getNeighborLOD(x, z - 1),
-                left: getNeighborLOD(x - 1, z),
-                right: getNeighborLOD(x + 1, z),
+                top: getNeighborLOD(0, 1),
+                bottom: getNeighborLOD(0, -1),
+                left: getNeighborLOD(-1, 0),
+                right: getNeighborLOD(1, 0),
             };
+
+            // The model matrix is also simple now. All tiles have the same scale.
+            const modelMatrix = mat4.create();
+            const scale = tileWorldSize / 2.0;
+            const centerX = x * tileWorldSize + scale;
+            const centerZ = z * tileWorldSize + scale;
+            mat4.translate(modelMatrix, modelMatrix, [centerX, 0, centerZ]);
+            mat4.scale(modelMatrix, modelMatrix, [scale, 1.0, scale]);
+
             const normalizedHeights = heights.map(h => Math.pow((h - globalMin) / (range + 1e-10), 1.0 / params.hurst));
-            view.updateTileMesh(key, normalizedHeights, params, globalOffset, neighborLODs);
+            view.updateTileMesh(key, normalizedHeights, params, null, neighborLODs, modelMatrix);
         }
     }
 

@@ -101,6 +101,26 @@ const mat4 = {
     },
 
     /**
+     * Scales the mat4 by the dimensions in the given vec3
+     * @param {Float32Array} out the receiving matrix
+     * @param {Float32Array} a the matrix to scale
+     * @param {Float32Array} v the vec3 to scale the matrix by
+     * @returns {Float32Array} out
+     */
+    scale: (out, a, v) => {
+        out[0] = a[0] * v[0]; out[1] = a[1] * v[0]; out[2] = a[2] * v[0]; out[3] = a[3] * v[0];
+        out[4] = a[4] * v[1]; out[5] = a[5] * v[1]; out[6] = a[6] * v[1]; out[7] = a[7] * v[1];
+        out[8] = a[8] * v[2]; out[9] = a[9] * v[2]; out[10] = a[10] * v[2]; out[11] = a[11] * v[2];
+        if (a !== out) {
+            out[12] = a[12];
+            out[13] = a[13];
+            out[14] = a[14];
+            out[15] = a[15];
+        }
+        return out;
+    },
+
+    /**
      * Multiplies two mat4s
      * @param {Float32Array} out the receiving matrix
      * @param {Float32Array} a the first operand

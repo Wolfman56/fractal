@@ -18,6 +18,8 @@ export default class View {
         this.indexFormat = 'uint16';
 
         this.projectionBuffer = null;
+        this.viewBuffer = null;
+        this.globalParamsBuffer = null;
         this.depthTexture = null;
 
         this.tiles = new Map(); // Manages the collection of visible tiles
@@ -78,7 +80,9 @@ export default class View {
                 buffers: [
                     { arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] },
                     { arrayStride: 12, attributes: [{ shaderLocation: 1, offset: 0, format: 'float32x3' }] },
-                    { arrayStride: 12, attributes: [{ shaderLocation: 2, offset: 0, format: 'float32x3' }] },
+                    { arrayStride: 4, attributes: [{ shaderLocation: 2, offset: 0, format: 'float32' }] },
+                    { arrayStride: 4, attributes: [{ shaderLocation: 3, offset: 0, format: 'float32' }] },
+                    { arrayStride: 4, attributes: [{ shaderLocation: 4, offset: 0, format: 'float32' }] },
                 ],
             },
             fragment: { module: renderModule, entryPoint: 'fs_main', targets: [{ format: this.format }] },
@@ -109,7 +113,7 @@ export default class View {
 
     recreateRenderResources() {
         // Destroy old resources
-        [this.projectionBuffer, this.depthTexture]
+        [this.projectionBuffer, this.viewBuffer, this.globalParamsBuffer, this.depthTexture]
             .forEach(r => r?.destroy());
 
         // Since the projectionBuffer was destroyed, any existing tiles have bind groups
@@ -122,6 +126,8 @@ export default class View {
 
         // Create Buffers
         this.projectionBuffer = this.device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        this.viewBuffer = this.device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        this.globalParamsBuffer = this.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
 
         // Create Textures
         this.depthTexture = this.device.createTexture({
@@ -146,7 +152,7 @@ export default class View {
             if (this.tiles.has(key)) {
                 newTiles.set(key, this.tiles.get(key));
             } else {
-                newTiles.set(key, new Tile(coord.x, coord.z, coord.lod, this.device, this.renderPipeline, this.projectionBuffer));
+                newTiles.set(key, new Tile(coord.x, coord.z, coord.lod, this.device, this.renderPipeline, this.projectionBuffer, this.viewBuffer, this.globalParamsBuffer));
             }
         }
 
@@ -159,22 +165,21 @@ export default class View {
         this.tiles = newTiles;
     }
 
-    updateTileMesh(key, heights, params, waterHeights = null, globalOffset = null, neighborLODs = {}) {
+    updateTileMesh(key, heights, params, waterHeights = null, neighborLODs = {}, modelMatrix = null) {
         const tile = this.tiles.get(key);
         if (!tile) return;
 
-        // Use the pre-calculated global offset if provided, otherwise calculate a local one.
-        // This ensures all tiles in a tiled system share the same "sea level".
-        const offset = globalOffset !== null ? globalOffset : 0;
-
-        const { positions, normals, colors, indices, yValues } = createTileGeometry(
+        const { positions, normals, indices, yValues, normalizedHeights, isWater, waterDepths } = createTileGeometry(
             heights,
             params,
             waterHeights,
             neighborLODs,
-            tile.lod,
-            offset
+            tile.lod
         );
+
+        if (modelMatrix) {
+            tile.modelMatrix = modelMatrix;
+        }
 
         // For a tiled system, we only want to set the camera target based on the central tile.
         if (tile.x === 0 && tile.z === 0) {
@@ -185,11 +190,11 @@ export default class View {
             this.camera.target = [0, maxY / 2, 0];
         }
 
-        this.updateMeshBuffers(tile, positions, normals, colors, indices);
+        this.updateMeshBuffers(tile, positions, normals, indices, normalizedHeights, isWater, waterDepths);
     }
 
-    updateMeshBuffers(tile, positions, normals, colors, indices) {
-        [tile.positionBuffer, tile.normalBuffer, tile.colorBuffer, tile.indexBuffer]
+    updateMeshBuffers(tile, positions, normals, indices, normalizedHeights, isWater, waterDepths) {
+        [tile.positionBuffer, tile.normalBuffer, tile.indexBuffer, tile.normalizedHeightBuffer, tile.isWaterBuffer, tile.waterDepthBuffer]
             .forEach(b => b?.destroy()); // Destroy old buffers for this tile
 
         tile.positionBuffer = this.device.createBuffer({
@@ -204,22 +209,53 @@ export default class View {
         });
         this.device.queue.writeBuffer(tile.normalBuffer, 0, new Float32Array(normals));
 
-        tile.colorBuffer = this.device.createBuffer({
-            size: Float32Array.from(colors).byteLength,
+        tile.normalizedHeightBuffer = this.device.createBuffer({
+            size: Float32Array.from(normalizedHeights).byteLength,
             usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
         });
-        this.device.queue.writeBuffer(tile.colorBuffer, 0, new Float32Array(colors));
+        this.device.queue.writeBuffer(tile.normalizedHeightBuffer, 0, new Float32Array(normalizedHeights));
+
+        tile.isWaterBuffer = this.device.createBuffer({
+            size: Float32Array.from(isWater).byteLength,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        });
+        this.device.queue.writeBuffer(tile.isWaterBuffer, 0, new Float32Array(isWater));
+
+        tile.waterDepthBuffer = this.device.createBuffer({
+            size: Float32Array.from(waterDepths).byteLength,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        });
+        this.device.queue.writeBuffer(tile.waterDepthBuffer, 0, new Float32Array(waterDepths));
 
         const vertexCount = positions.length / 3;
         this.indexFormat = vertexCount > 65535 ? 'uint32' : 'uint16';
         const IndexArray = this.indexFormat === 'uint32' ? Uint32Array : Uint16Array;
+
+        // The indexCount for drawing must be the original, unpadded length.
         tile.indexCount = indices.length;
 
+        // The size of a buffer and the data written to it must be a multiple of 4 bytes.
+        // If we're using uint16 (2 bytes) and have an odd number of indices, the byte length
+        // will not be a multiple of 4. We must pad the data to meet this requirement.
+        let indexData = new IndexArray(indices);
+        if (indexData.byteLength % 4 !== 0) {
+            const paddedData = new IndexArray(indices.length + 1);
+            paddedData.set(indices);
+            // The extra element is 0 by default, which is fine as it won't be drawn.
+            indexData = paddedData;
+        }
+
         tile.indexBuffer = this.device.createBuffer({
-            size: IndexArray.from(indices).byteLength,
+            size: indexData.byteLength, // Now guaranteed to be a multiple of 4
             usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
         });
-        this.device.queue.writeBuffer(tile.indexBuffer, 0, new IndexArray(indices));
+        this.device.queue.writeBuffer(tile.indexBuffer, 0, indexData);
+    }
+
+    updateGlobalParams(seaLevel) {
+        if (this.globalParamsBuffer) {
+            this.device.queue.writeBuffer(this.globalParamsBuffer, 0, new Float32Array([seaLevel]));
+        }
     }
 
     drawScene() {
@@ -230,6 +266,9 @@ export default class View {
         const projectionMatrix = mat4.create();
         mat4.perspective(projectionMatrix, (45 * Math.PI) / 180, this.canvas.width / this.canvas.height, 0.1, 100);
         this.device.queue.writeBuffer(this.projectionBuffer, 0, projectionMatrix);
+
+        const viewMatrix = this.camera.getViewMatrix();
+        this.device.queue.writeBuffer(this.viewBuffer, 0, viewMatrix);
 
         const encoder = this.device.createCommandEncoder();
         const textureView = this.context.getCurrentTexture().createView();
@@ -248,8 +287,6 @@ export default class View {
             },
         });
 
-        const viewMatrix = this.camera.getViewMatrix();
-
         for (const tile of this.tiles.values()) {
             if (!tile.indexBuffer) continue; // Skip tiles that aren't ready
 
@@ -267,7 +304,9 @@ export default class View {
             renderPass.setBindGroup(0, tile.renderBindGroup);
             renderPass.setVertexBuffer(0, tile.positionBuffer);
             renderPass.setVertexBuffer(1, tile.normalBuffer);
-            renderPass.setVertexBuffer(2, tile.colorBuffer);
+            renderPass.setVertexBuffer(2, tile.normalizedHeightBuffer);
+            renderPass.setVertexBuffer(3, tile.isWaterBuffer);
+            renderPass.setVertexBuffer(4, tile.waterDepthBuffer);
             renderPass.setIndexBuffer(tile.indexBuffer, this.indexFormat);
             renderPass.drawIndexed(tile.indexCount);
         }

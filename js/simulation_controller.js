@@ -1,18 +1,19 @@
 import { TiledLODModel, UntiledHeightmapModel } from './models.js';
 import { HydraulicErosionModel, HydraulicErosionModelDebug, SimpleErosionModel } from './erosion_models.js';
-import { ScrollingShaderStrategy, FractalZoomShaderStrategy, ScrollAndZoomStrategy, TiledLODShaderStrategy } from './shader_strategies.js';
+import { ScrollingShaderStrategy, FractalZoomShaderStrategy, ScrollAndZoomStrategy, PyramidShaderStrategy } from './shader_strategies.js';
 import SimulationCapture from './simulation_capture.js';
 
 /**
  * Manages the core simulation state and logic, including terrain generation and erosion.
  */
 export default class SimulationController {
-    constructor(device, view, uiController) {
+    constructor(device, view, uiController, config) {
         this.device = device;
         this.view = view;
         this.uiController = uiController;
         this.simulationCapture = new SimulationCapture(this.uiController);
 
+        this.config = config;
         // Simulation State
         this.isUpdating = false;
         this.wantsUpdate = false;
@@ -23,7 +24,7 @@ export default class SimulationController {
             'Scrolling': new ScrollingShaderStrategy(),
             'FractalZoom': new FractalZoomShaderStrategy(),
             'Scroll & Zoom': new ScrollAndZoomStrategy(),
-            'Tiled LOD': new TiledLODShaderStrategy(),
+            'Pyramid': new PyramidShaderStrategy(),
         };
         this.models = {};
         this.currentModel = null;
@@ -50,27 +51,17 @@ export default class SimulationController {
         for (const model of Object.values(this.erosionModels)) {
             await model.createPipelines();
         }
-        this.currentErosionModel = this.erosionModels['hydraulic'];
 
         for (const strategy of Object.values(this.shaderStrategies)) {
             await strategy.createPipelines(this.device, computePipelineLayout);
         }
 
-        this.models = {
-            'Scrolling': new UntiledHeightmapModel(this.device, this.shaderStrategies['Scrolling']),
-            'FractalZoom': new UntiledHeightmapModel(this.device, this.shaderStrategies['FractalZoom']),
-            'Scroll & Zoom': new UntiledHeightmapModel(this.device, this.shaderStrategies['Scroll & Zoom']),
-            'Tiled LOD': new TiledLODModel(this.device, this.shaderStrategies['Tiled LOD']),
-        };
-
-        // For the main page, default to Tiled LOD. For the test page, default to a strategy that supports erosion.
-        const isTestPage = !document.getElementById('shader-strategy-select');
-        if (isTestPage) {
-            this.currentModel = this.models['Scroll & Zoom'];
-            console.log("Test page detected. Defaulting to 'Scroll & Zoom' strategy.");
-        } else {
-            this.currentModel = this.models['Tiled LOD'];
+        for (const [name, strategy] of Object.entries(this.shaderStrategies)) {
+            this.models[name] = new UntiledHeightmapModel(this.device, strategy);
         }
+
+        this.currentModel = this.models[this.config.simulation.shaderStrategy];
+        this.currentErosionModel = this.erosionModels[this.config.erosion.model];
     }
 
     tick(wantsUpdate, params) {
@@ -89,7 +80,7 @@ export default class SimulationController {
 
         try {
             const confirmOverwrite = document.getElementById('confirm-overwrite')?.checked ?? true;
-            if (this.currentModel.erosionFrameCounter > 0 && confirmOverwrite) {
+            if (this.totalErosionIterations > 0 && confirmOverwrite) {
                 if (!window.confirm("Changing these parameters will discard the current erosion. Are you sure you want to continue?")) {
                     this.isUpdating = false;
                     this.wantsUpdate = false;
@@ -109,18 +100,21 @@ export default class SimulationController {
                     model.shaderStrategy.resetNormalization();
                 }
                 for (const erosionModel of Object.values(this.erosionModels)) {
-                    erosionModel.recreateResources(params.gridSize, {
-                        heightmapTextureA: this.currentModel.heightmapTextureA,
-                        heightmapTextureB: this.currentModel.heightmapTextureB,
-                    });
+                    // The erosion model now uses the same power-of-two grid size as the terrain model.
+                    if (params.gridSize > 0) {
+                        erosionModel.recreateResources(params.gridSize);
+                    }
                 }
             }
 
-            const fundamentalParams = ['octaves', 'persistence', 'lacunarity', 'hurst', 'seed'];
-            const hasChanged = !this.currentModel.lastGeneratedParams ||
-                fundamentalParams.some(p => params[p] !== this.currentModel.lastGeneratedParams[p]);
+            // Parameters that define the fundamental shape of the world.
+            // A change in these requires resetting the normalization range. Navigation via
+            // zoom (scale) or pan (worldOffset) should not reset the normalization.
+            const worldShapingParams = ['octaves', 'persistence', 'lacunarity', 'hurst', 'seed'];
+            const hasWorldShapeChanged = !this.currentModel.lastGeneratedParams ||
+                worldShapingParams.some(p => params[p] !== this.currentModel.lastGeneratedParams[p]);
 
-            if (hasChanged) {
+            if (hasWorldShapeChanged) {
                 needsNormalizationReset = true;
             }
 
@@ -144,10 +138,6 @@ export default class SimulationController {
             return;
         }
         if (!this.currentModel.lastGeneratedHeightmap) return;
-
-        if (this.currentErosionModel.resetState) {
-            this.currentErosionModel.resetState();
-        }
 
         this.isEroding = true;
         this.wantsUpdate = false;
@@ -223,5 +213,16 @@ export default class SimulationController {
     changeErosionModel(name) {
         this.currentErosionModel = this.erosionModels[name];
         console.log(`Switched to ${name} erosion model.`);
+        // When switching models, we must reset the state to ensure a clean comparison.
+        if (this.currentErosionModel.resetState) {
+            this.currentErosionModel.resetState();
+        }
+
+        // Reset the terrain generation normalization state. This ensures that when the
+        // terrain is regenerated, it's not using stale min/max values from a previous generation.
+        this.currentModel.shaderStrategy.resetNormalization();
+
+        // And trigger a terrain update to load the original heightmap again.
+        this.wantsUpdate = true;
     }
 }

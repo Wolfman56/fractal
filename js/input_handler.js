@@ -1,115 +1,176 @@
 /**
- * Manages all user input for camera control and scene navigation.
+ * Handles all user input, including mouse/touch for camera control and keyboard for scrolling.
  */
 export default class InputHandler {
-    /**
-     * @param {HTMLCanvasElement} canvas - The canvas element to attach listeners to.
-     * @param {View} view - The main view object containing the camera.
-     * @param {function} getAppState - A function that returns the current app state needed by the handler.
-     * @param {function} onUpdateNeeded - A callback to signal that the terrain needs regeneration.
-     */
-    constructor(canvas, view, getAppState, onUpdateNeeded) {
+    constructor(canvas, view, getState, onUpdate) {
         this.canvas = canvas;
         this.view = view;
-        this.getAppState = getAppState;
-        this.onUpdateNeeded = onUpdateNeeded;
+        this.getState = getState;
+        this.onUpdate = onUpdate;
 
+        // Camera interaction state
         this.isDragging = false;
-        this.prevMouseX = 0;
-        this.prevMouseY = 0;
+        this.lastMouseX = 0;
+        this.lastMouseY = 0;
 
-        this.initialPinchDistance = 0;
-        this.isPinching = false;
-        this.lastTouchX = 0;
-        this.lastTouchY = 0;
+        // Scrolling state
+        this.worldOffset = { x: 0, y: 0 };
+        this.keys = new Set();
+        this.scrollSpeed = 10;
+
+        // Touch state
+        this.lastPinchDist = 0;
     }
 
     setupEventListeners() {
-        // Mouse controls
-        this.canvas.addEventListener('mousedown', e => { this.isDragging = true; this.prevMouseX = e.clientX; this.prevMouseY = e.clientY; });
-        document.addEventListener('mouseup', () => { this.isDragging = false; });
-        document.addEventListener('mousemove', e => {
-            if (!this.isDragging) return;
-            this.view.camera.orbit((e.clientX - this.prevMouseX) * 0.005, (e.clientY - this.prevMouseY) * 0.005);
-            this.prevMouseX = e.clientX;
-            this.prevMouseY = e.clientY;
-            this.view.drawScene();
-        });
-        this.canvas.addEventListener('wheel', e => {
-            e.preventDefault();
-            const zoomAmount = e.deltaY * 0.01;
-            this.view.camera.zoom(zoomAmount);
+        // Mouse events for camera
+        this.canvas.addEventListener('mousedown', this.handleMouseDown.bind(this));
+        this.canvas.addEventListener('mouseup', this.handleMouseUp.bind(this));
+        this.canvas.addEventListener('mousemove', this.handleMouseMove.bind(this));
+        this.canvas.addEventListener('wheel', this.handleWheel.bind(this));
 
-            if (this.getAppState().currentModel.shaderStrategy.regeneratesOnZoom) {
-                this.onUpdateNeeded();
+        // Touch events for camera. { passive: false } is important to allow preventDefault().
+        this.canvas.addEventListener('touchstart', this.handleTouchStart.bind(this), { passive: false });
+        this.canvas.addEventListener('touchend', this.handleTouchEnd.bind(this), { passive: false });
+        this.canvas.addEventListener('touchmove', this.handleTouchMove.bind(this), { passive: false });
+
+        // Keyboard events for scrolling
+        window.addEventListener('keydown', this.handleKeyDown.bind(this));
+        window.addEventListener('keyup', this.handleKeyUp.bind(this));
+    }
+
+    handleMouseDown(e) {
+        if (e.button === 0) { // Left mouse button
+            this.isDragging = true;
+            this.lastMouseX = e.clientX;
+            this.lastMouseY = e.clientY;
+        }
+    }
+
+    handleMouseUp(e) {
+        if (e.button === 0) {
+            this.isDragging = false;
+        }
+    }
+
+    handleMouseMove(e) {
+        if (this.isDragging) {
+            const dx = e.clientX - this.lastMouseX;
+            const dy = e.clientY - this.lastMouseY;
+            // Scale down mouse orbit sensitivity. The values are small as they are treated as radians.
+            this.view.camera.orbit(dx * 0.005, dy * 0.005);
+            this.lastMouseX = e.clientX;
+            this.lastMouseY = e.clientY;
+            this.view.drawScene();
+        }
+    }
+
+    handleWheel(e) {
+        e.preventDefault();
+        const { currentModel } = this.getState();
+        // Scale down wheel zoom sensitivity.
+        this.view.camera.zoom(e.deltaY * 0.01);
+        if (currentModel?.shaderStrategy.regeneratesOnZoom) {
+            this.onUpdate();
+        } else {
+            this.view.drawScene();
+        }
+    }
+
+    handleTouchStart(e) {
+        e.preventDefault();
+        if (e.touches.length === 1) {
+            this.isDragging = true;
+            this.lastMouseX = e.touches[0].clientX;
+            this.lastMouseY = e.touches[0].clientY;
+        } else if (e.touches.length === 2) {
+            this.isDragging = false; // Stop orbiting when pinching
+            this.lastPinchDist = this.getPinchDist(e);
+        }
+    }
+
+    handleTouchEnd(e) {
+        this.isDragging = false;
+        this.lastPinchDist = 0;
+    }
+
+    handleTouchMove(e) {
+        e.preventDefault();
+        if (this.isDragging && e.touches.length === 1) {
+            const dx = e.touches[0].clientX - this.lastMouseX;
+            const dy = e.touches[0].clientY - this.lastMouseY;
+            // Scale down touch orbit sensitivity
+            this.view.camera.orbit(dx * 0.01, dy * 0.01);
+            this.lastMouseX = e.touches[0].clientX;
+            this.lastMouseY = e.touches[0].clientY;
+            this.view.drawScene();
+        } else if (e.touches.length === 2 && this.lastPinchDist > 0) {
+            const newPinchDist = this.getPinchDist(e);
+            const delta = this.lastPinchDist - newPinchDist;
+
+            // Scale down pinch-to-zoom sensitivity
+            this.view.camera.zoom(delta * 0.02);
+
+            this.lastPinchDist = newPinchDist;
+
+            const { currentModel } = this.getState();
+            if (currentModel?.shaderStrategy.regeneratesOnZoom) {
+                this.onUpdate();
             } else {
                 this.view.drawScene();
             }
-        }, { passive: false });
+        }
+    }
 
-        // Keyboard controls
-        window.addEventListener('keydown', (e) => {
-            const currentModel = this.getAppState().currentModel;
-            if (currentModel.shaderStrategy.supportsScrolling) {
-                const initialDistance = Math.hypot(...this.view.camera.initialPosition);
-                const zoomFactor = this.view.camera.getDistance() / initialDistance;
-                const scrollAmount = 20 * zoomFactor;
-                let scrolled = false;
-                if (e.key === 'ArrowUp') { currentModel.shaderStrategy.scroll(0, -scrollAmount); scrolled = true; }
-                if (e.key === 'ArrowDown') { currentModel.shaderStrategy.scroll(0, scrollAmount); scrolled = true; }
-                if (e.key === 'ArrowLeft') { currentModel.shaderStrategy.scroll(-scrollAmount, 0); scrolled = true; }
-                if (e.key === 'ArrowRight') { currentModel.shaderStrategy.scroll(scrollAmount, 0); scrolled = true; }
-
-                if (scrolled) {
-                    e.preventDefault();
-                    this.onUpdateNeeded();
-                }
-            }
-        });
-
-        // Touch controls
-        this.canvas.addEventListener('touchstart', e => {
+    handleKeyDown(e) {
+        if (e.key.startsWith('Arrow')) {
             e.preventDefault();
-            if (e.touches.length === 1) {
-                this.isPinching = false;
-                this.lastTouchX = e.touches[0].clientX;
-                this.lastTouchY = e.touches[0].clientY;
-            } else if (e.touches.length === 2) {
-                this.isPinching = true;
-                const dx = e.touches[0].clientX - e.touches[1].clientX;
-                const dy = e.touches[0].clientY - e.touches[1].clientY;
-                this.initialPinchDistance = Math.hypot(dx, dy);
-            }
-        }, { passive: false });
+            this.keys.add(e.key);
+            this.handleScrolling();
+        }
 
-        this.canvas.addEventListener('touchmove', e => {
+        // Camera dolly controls (move forward/backward without regenerating terrain)
+        const dollySpeed = 0.2; // A constant for how much to move per key press
+        if (e.key === 'r') {
             e.preventDefault();
-            if (this.isPinching && e.touches.length === 2) {
-                const dx = e.touches[0].clientX - e.touches[1].clientX;
-                const dy = e.touches[0].clientY - e.touches[1].clientY;
-                const newPinchDistance = Math.hypot(dx, dy);
-                const zoomAmount = (this.initialPinchDistance - newPinchDistance) * 0.02;
-                this.view.camera.zoom(zoomAmount);
-                this.initialPinchDistance = newPinchDistance;
+            this.view.camera.zoom(dollySpeed); // zoom() with positive delta moves closer
+            this.view.drawScene();
+        } else if (e.key === 'f') {
+            e.preventDefault();
+            this.view.camera.zoom(-dollySpeed); // zoom() with negative delta moves away
+            this.view.drawScene();
+        }
+    }
 
-                if (this.getAppState().currentModel.shaderStrategy.regeneratesOnZoom) {
-                    this.onUpdateNeeded();
-                } else {
-                    this.view.drawScene();
-                }
-            } else if (!this.isPinching && e.touches.length === 1) {
-                const touchX = e.touches[0].clientX;
-                const touchY = e.touches[0].clientY;
-                this.view.camera.orbit((touchX - this.lastTouchX) * 0.005, (touchY - this.lastTouchY) * 0.005);
-                this.lastTouchX = touchX;
-                this.lastTouchY = touchY;
-                this.view.drawScene();
-            }
-        }, { passive: false });
+    handleKeyUp(e) {
+        if (e.key.startsWith('Arrow')) {
+            this.keys.delete(e.key);
+        }
+    }
 
-        this.canvas.addEventListener('touchend', () => {
-            this.isPinching = false;
-            this.initialPinchDistance = 0;
-        });
+    handleScrolling() {
+        const { currentModel } = this.getState();
+        // Only allow panning for strategies that explicitly support it.
+        if (!currentModel || !currentModel.shaderStrategy.supportsPanning) {
+            return;
+        }
+
+        let scrolled = false;
+        if (this.keys.has('ArrowUp')) { this.worldOffset.y += this.scrollSpeed; scrolled = true; }
+        if (this.keys.has('ArrowDown')) { this.worldOffset.y -= this.scrollSpeed; scrolled = true; }
+        if (this.keys.has('ArrowLeft')) { this.worldOffset.x -= this.scrollSpeed; scrolled = true; }
+        if (this.keys.has('ArrowRight')) { this.worldOffset.x += this.scrollSpeed; scrolled = true; }
+
+        if (scrolled) {
+            this.onUpdate();
+        }
+    }
+
+    getPinchDist(e) {
+        const t1 = e.touches[0];
+        const t2 = e.touches[1];
+        const dx = t1.clientX - t2.clientX;
+        const dy = t1.clientY - t2.clientY;
+        return Math.hypot(dx, dy);
     }
 }

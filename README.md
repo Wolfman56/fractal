@@ -71,6 +71,8 @@ Because the application loads shader files and uses ES modules, you must run it 
   - **Two Finger Pinch**: Zoom in and out.
 - **Keyboard**:
   - **Arrow Keys**: In "Scrolling" or "Scroll & Zoom" mode, these keys pan the view across the terrain.
+  - **'r' key**: Move camera closer to the terrain (dolly in).
+  - **'f' key**: Move camera away from the terrain (dolly out).
 - **UI Panel**:
   - Use the sliders to adjust terrain generation parameters. Changes are reflected automatically.
   - Use the "Erode" button to apply the hydraulic erosion simulation.

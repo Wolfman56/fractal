@@ -17,6 +17,14 @@ class Controller {
     }
 
     async init() {
+        const response = await fetch('/config.json');
+        if (!response.ok) {
+            console.error("Failed to load config.json. Application cannot start.");
+            alert("Error: Could not load configuration file.");
+            return;
+        }
+        const config = await response.json();
+
         const gpuContext = await this.view.initWebGPU();
         if (!gpuContext) {
             const controls = document.getElementById('controls');
@@ -26,13 +34,20 @@ class Controller {
 
         this.device = gpuContext.device;
 
-        this.uiController = new UIController({
-            onRegenerate: () => this.simulationController.wantsUpdate = true,
+        const uiCallbacks = {
+            onRegenerate: () => {
+                // A full, user-triggered regeneration should reset navigation state (like panning)
+                // to ensure the generated terrain is centered at the origin. This also fixes a
+                // bug where a transient state could cause an initial scroll.
+                if (this.inputHandler) this.inputHandler.worldOffset = { x: 0, y: 0 };
+                this.simulationController.wantsUpdate = true;
+            },
             onErode: () => this.simulationController.erodeTerrain(this._getErosionParamsFromUI(), parseInt(document.getElementById('erosion-iterations')?.value || '10', 10)),
             onResetView: () => {
                 this.view.camera.reset();
                 this.view.drawScene();
             },
+            onRedrawScene: () => this.view.drawScene(),
             onSnapshot: () => this.takeSnapshot(),
             onToggleCapture: () => this.simulationController.toggleCapture(),
             onSaveCapture: () => this.simulationController.saveCaptureData(),
@@ -40,9 +55,10 @@ class Controller {
             onStrategyChange: (name) => this.simulationController.changeShaderStrategy(name),
             onErosionModelChange: (name) => this.simulationController.changeErosionModel(name),
             onParamsChanged: () => this.simulationController.wantsUpdate = true,
-        });
+        };
+        this.uiController = new UIController(uiCallbacks, config);
 
-        this.simulationController = new SimulationController(this.device, this.view, this.uiController);
+        this.simulationController = new SimulationController(this.device, this.view, this.uiController, config);
         await this.simulationController.init(gpuContext.computePipelineLayout);
 
         this.inputHandler = new InputHandler(this.canvas, this.view,
@@ -50,8 +66,8 @@ class Controller {
             () => this.simulationController.wantsUpdate = true
         );
 
-        this.uiController.populateDropdown('shader-strategy-select', Object.keys(this.simulationController.shaderStrategies), this.simulationController.currentModel.shaderStrategy.name);
-        this.uiController.populateDropdown('erosion-model-select', this.simulationController.erosionModelDisplayNames, 'hydraulic');
+        this.uiController.populateDropdown('shader-strategy-select', Object.keys(this.simulationController.shaderStrategies), config.simulation.shaderStrategy);
+        this.uiController.populateDropdown('erosion-model-select', this.simulationController.erosionModelDisplayNames, config.erosion.model);
         this.uiController.setupEventListeners();
         this.inputHandler.setupEventListeners();
 
@@ -61,17 +77,11 @@ class Controller {
     }
 
     _getParamsFromUI() {
-        const controlsContainer = document.getElementById('controls');
-        if (!controlsContainer) {
-            // Default params for test page
-            return {
-                gridSize: 512,
-                octaves: 8, persistence: 0.5, lacunarity: 2.0, scale: 512,
-                seed: 42, heightMultiplier: 0.7, hurst: 0.6,
-            };
-        }
+        const gridSizeSlider = document.getElementById('gridSize');
+        const worldOffset = this.inputHandler.worldOffset || { x: 0, y: 0 };
+        // The gridSizeSlider check is now redundant as the config ensures UI is present.
 
-        const gridSizeSliderValue = parseInt(document.getElementById('gridSize').value, 10);
+        const gridSizeSliderValue = parseInt(gridSizeSlider.value, 10);
         const cycles = parseFloat(document.getElementById('cycles').value) || 1.0;
         const baseScale = Math.pow(2, gridSizeSliderValue) / cycles;
         let finalScale = baseScale;
@@ -94,6 +104,8 @@ class Controller {
             seed: parseInt(document.getElementById('seed').value, 10),
             heightMultiplier: parseFloat(document.getElementById('heightMultiplier').value),
             hurst: parseFloat(document.getElementById('hurst').value),
+            worldOffset: worldOffset,
+            seaLevel: parseFloat(document.getElementById('erosion-sea-level')?.value || '0.15'),
         };
     }
 
@@ -115,22 +127,37 @@ class Controller {
         };
     }
 
-    async takeSnapshot() {
+    takeSnapshot() {
+        // First, ensure the scene is drawn with the latest data.
         this.view.drawScene();
-        await this.view.device.queue.onSubmittedWorkDone();
-        const link = document.createElement('a');
-        link.href = this.canvas.toDataURL('image/png');
-        link.download = `fractal_snapshot_${Date.now()}.png`;
-        link.click();
+
+        // Wait for the GPU to finish its work.
+        this.view.device.queue.onSubmittedWorkDone().then(() => {
+            // By wrapping the toDataURL call in requestAnimationFrame, we give the
+            // browser a chance to composite the newly rendered frame before we try to capture it.
+            // This helps avoid race conditions that can result in a blank image.
+            requestAnimationFrame(() => {
+                const link = document.createElement('a');
+                link.href = this.canvas.toDataURL('image/png');
+                link.download = `fractal_snapshot_${Date.now()}.png`;
+                link.click();
+            });
+        });
     }
 
     gameLoop(timestamp) {
         this.gameLoopId = requestAnimationFrame(this.gameLoop.bind(this));
 
+        // Get latest UI parameters for this frame.
+        const params = this._getParamsFromUI();
+
+        // Update global shader uniforms, like sea level, before any drawing occurs.
+        this.view.updateGlobalParams(params.seaLevel);
+
         const wantsUpdate = this.simulationController.wantsUpdate;
         this.simulationController.wantsUpdate = false; // Consume the request
 
-        this.simulationController.tick(wantsUpdate, this._getParamsFromUI());
+        this.simulationController.tick(wantsUpdate, params);
     }
 }
 

@@ -1,0 +1,27 @@
+{
+  "generation": {
+    "gridSizeExp": 8,
+    "octaves": 8,
+    "persistence": 0.5,
+    "lacunarity": 2.0,
+    "cycles": 1.0,
+    "seed": 42,
+    "heightMultiplier": 0.5,
+    "hurst": 0.6
+  },
+  "erosion": {
+    "model": "hydraulic",
+    "iterations": 32,
+    "wetness": 0.2,
+    "solubility": 0.5,
+    "deposition": 0.3,
+    "capacity": 20,
+    "seaLevel": 0.15
+  },
+  "simulation": {
+    "shaderStrategy": "Scroll & Zoom"
+  },
+  "ui": {
+    "confirmOverwrite": true
+  }
+}

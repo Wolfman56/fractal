@@ -10,58 +10,83 @@
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-    <button id="drawer-toggle">☰</button>
-    <div id="controls" class="drawer">
-        <h3 style="text-align: center; margin-top: 0;">Controls</h3>
-        <label>
-            <span>Render Mode</span>
-            <select id="shader-strategy-select" style="width: 60%;"></select>
-        </label>
-        <label>
-            <span>Confirm Overwrites</span>
-            <input type="checkbox" id="confirm-overwrite" checked title="If checked, you will be asked for confirmation before a parameter change overwrites an eroded terrain.">
-        </label>
-        <hr>
-        <label><span>Grid Size (2^N)</span><input type="range" id="gridSize" min="1" max="10" step="1" value="2"><span id="gridSize-value"> (2^2)</span></label>
-        <label><span>Octaves</span><input type="range" id="octaves" min="1" max="10" value="8"><span id="octaves-value">8</span></label>
-        <label><span>Persistence</span><input type="range" id="persistence" min="0.1" max="1" step="0.05" value="0.5"><span id="persistence-value">0.5</span></label>
-        <label><span>Lacunarity</span><input type="range" id="lacunarity" min="1" max="4" step="0.1" value="2"><span id="lacunarity-value">2</span></label>
-        <label><span>Cycles</span><input type="range" id="cycles" min="1" max="8" step="0.1" value="1"><span id="cycles-value">1</span></label>
-        <label><span>Seed</span><input type="range" id="seed" min="0" max="10000" value="42"><span id="seed-value">42</span></label>
-        <label><span>Height Multiplier</span><input type="range" id="heightMultiplier" min="0.1" max="5" step="0.1" value="0.5"><span id="heightMultiplier-value">0.5</span></label>
-        <label><span>Hurst</span><input type="range" id="hurst" min="0.1" max="2" step="0.1" value="0.6"><span id="hurst-value">0.6</span></label>
-        <hr>
-        <h4 style="text-align: center; margin-bottom: 10px; margin-top: 0;">Erosion</h4>
-        <label>
-            <span>Erosion Model</span>
-            <select id="erosion-model-select" style="width: 60%;"></select>
-        </label>
-        <label><span>Iterations</span><input type="range" id="erosion-iterations" min="1" max="100" value="32"><span id="erosion-iterations-value">32</span></label>        <label><span>Wetness</span><input type="range" id="erosion-wetness" min="0.01" max="1.0" step="0.01" value="0.2"><span id="erosion-wetness-value">0.2</span></label>
-        <label><span>Solubility</span><input type="range" id="erosion-solubility" min="0.01" max="1.0" step="0.01" value="0.5"><span id="erosion-solubility-value">0.5</span></label>
-        <label><span>Deposition Rate</span><input type="range" id="erosion-deposition" min="0.01" max="1.0" step="0.01" value="0.3"><span id="erosion-deposition-value">0.3</span></label>
-        <label><span>Capacity</span><input type="range" id="erosion-capacity" min="1" max="64" step="1" value="20"><span id="erosion-capacity-value">20</span></label>
-        <label><span>Sea Level</span><input type="range" id="erosion-sea-level" min="0.0" max="1.0" step="0.01" value="0.15"><span id="erosion-sea-level-value">0.15</span></label>
-        <hr>
-        <div id="erosion-debug-actions" style="display: flex; flex-direction: column; gap: 10px; margin-top: 5px;">
-            <button id="capture-toggle" title="Toggle capturing intermediate data on each erosion step.">Capture Data</button>
-            <div style="display: flex; gap: 10px;">
-                <button id="save-capture" title="Saves the captured debug data to a JSON file." style="flex-grow: 1;">Save Capture</button>
-                <button id="clear-capture" title="Clears all captured debug data." style="flex-grow: 1;">Clear Capture</button>
+    <div class="app-layout">
+        <aside id="controls" class="sidebar">
+            <h2 class="sidebar-title">Settings</h2>
+
+            <details class="control-section" open>
+                <summary>Generation</summary>
+                <div class="control-group">
+                    <label>
+                        <span>Render Mode</span>
+                        <select id="shader-strategy-select"></select>
+                    </label>
+                    <label>
+                        <span>Confirm Overwrites</span>
+                        <input type="checkbox" id="confirm-overwrite" title="If checked, you will be asked for confirmation before a parameter change overwrites an eroded terrain.">
+                    </label>
+                    <hr>
+                    <label><span>Grid Size (2^N)</span><input type="range" id="gridSize" min="4" max="10" step="1"><span id="gridSize-value"></span></label>
+                    <label><span>Octaves</span><input type="range" id="octaves" min="1" max="10"><span id="octaves-value"></span></label>
+                    <label><span>Persistence</span><input type="range" id="persistence" min="0.1" max="1" step="0.05"><span id="persistence-value"></span></label>
+                    <label><span>Lacunarity</span><input type="range" id="lacunarity" min="1" max="4" step="0.1"><span id="lacunarity-value"></span></label>
+                    <label><span>Cycles</span><input type="range" id="cycles" min="1" max="8" step="0.1"><span id="cycles-value"></span></label>
+                    <label><span>Seed</span><input type="range" id="seed" min="0" max="10000"><span id="seed-value"></span></label>
+                    <label><span>Height Multiplier</span><input type="range" id="heightMultiplier" min="0.1" max="5" step="0.1"><span id="heightMultiplier-value"></span></label>
+                    <label><span>Hurst</span><input type="range" id="hurst" min="0.1" max="2" step="0.1"><span id="hurst-value"></span></label>
+                </div>
+                <div class="action-button-container">
+                    <button id="regenerate">Regenerate</button>
+                </div>
+            </details>
+
+            <details class="control-section">
+                <summary>Erosion</summary>
+                <div class="control-group">
+                    <label>
+                        <span>Erosion Model</span>
+                        <select id="erosion-model-select"></select>
+                    </label>
+                    <label><span>Iterations</span><input type="range" id="erosion-iterations" min="1" max="100"><span id="erosion-iterations-value"></span></label>
+                    <label><span>Wetness</span><input type="range" id="erosion-wetness" min="0.01" max="1.0" step="0.01"><span id="erosion-wetness-value"></span></label>
+                    <label><span>Solubility</span><input type="range" id="erosion-solubility" min="0.01" max="1.0" step="0.01"><span id="erosion-solubility-value"></span></label>
+                    <label><span>Deposition Rate</span><input type="range" id="erosion-deposition" min="0.01" max="1.0" step="0.01"><span id="erosion-deposition-value"></span></label>
+                    <label><span>Capacity</span><input type="range" id="erosion-capacity" min="1" max="64" step="1"><span id="erosion-capacity-value"></span></label>
+                    <label><span>Sea Level</span><input type="range" id="erosion-sea-level" min="0.0" max="1.0" step="0.01"><span id="erosion-sea-level-value"></span></label>
+                </div>
+                <div class="action-button-container">
+                    <button id="erode-terrain">Erode</button>
+                </div>
+            </details>
+
+            <details id="debug-section" class="control-section">
+                <summary>Debug</summary>
+                <div class="control-group">
+                    <div id="erosion-debug-actions">
+                        <button id="capture-toggle" title="Toggle capturing intermediate data on each erosion step.">Capture Data</button>
+                        <div class="button-group">
+                            <button id="save-capture" title="Saves the captured debug data to a JSON file.">Save Capture</button>
+                            <button id="clear-capture" title="Clears all captured debug data.">Clear Capture</button>
+                        </div>
+                    </div>
+                    <div class="stats-container">
+                        <div class="stat-line"><span>Eroded</span><span id="stat-erosion">0.00</span></div>
+                        <div class="stat-line"><span>Deposited</span><span id="stat-deposition">0.00</span></div>
+                        <div class="stat-line"><span>Iterations</span><span id="stat-iterations">0</span></div>
+                        <div class="stat-line"><span>Frames Captured</span><span id="stat-capture">0</span></div>
+                    </div>
+                </div>
+            </details>
+        </aside>
+
+        <main class="app-container">
+            <canvas id="canvas"></canvas>
+            <div id="action-bar">
+                <button id="snapshot-button">Snapshot</button>
+                <button id="reset-view">Reset View</button>
             </div>
-        </div>
-        <div id="erosion-stats" style="color: #ccc; padding: 10px 5px; text-align: center; font-size: 0.9em; display: flex; justify-content: space-around; width: 100%; border-top: 1px solid var(--border-color); margin-top: 20px;">
-            <span id="erosion-metrics"></span><span id="capture-status"></span>
-        </div>
+        </main>
     </div>
-    <main class="app-container">
-        <canvas id="canvas"></canvas>
-        <div id="action-bar">
-            <button id="regenerate">Regenerate</button>
-            <button id="erode-terrain">Erode</button>
-            <button id="snapshot-button">Snapshot</button>
-            <button id="reset-view">Reset View</button>
-        </div>
-    </main>
 
     <script src="js/controller.js" type="module" defer></script>
 </body>
