@@ -286,7 +286,10 @@ export class BaseModel {
                     totalErosion -= diff; // diff is negative, so subtract to make it positive
                 }
             }
-            if (numPoints > 0) {
+            // Check for numPoints to avoid division by zero.
+            // If no points, erosion and deposition are zero.
+            if (numPoints === 0) { totalErosion = 0; totalDeposition = 0; }
+            else {
                 totalErosion /= numPoints;
                 totalDeposition /= numPoints;
             }

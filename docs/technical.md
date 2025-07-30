@@ -131,3 +131,4 @@ The project includes a GPU-based hydraulic erosion simulation based on the paper
 - Hydraulic Erosion Pass
 - Normalization
 - View-Dependent Modification (LOD Stitching)
+- **Full Hydrological Cycle**: Instead of a simple "rain and evaporate" model, implement a closed system where evaporated water accumulates in a global "atmosphere" and is then precipitated back onto the terrain, potentially influenced by orographic lift (mountains creating rain shadows).

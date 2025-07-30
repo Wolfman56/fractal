@@ -43,6 +43,7 @@ class Controller {
                 this.simulationController.wantsUpdate = true;
             },
             onErode: () => this.simulationController.erodeTerrain(this._getErosionParamsFromUI(), parseInt(document.getElementById('erosion-iterations')?.value || '10', 10)),
+            onToggleRainDry: () => this.simulationController.toggleRainDry(this._getErosionParamsFromUI()),
             onResetView: () => {
                 this.view.camera.reset();
                 this.view.drawScene();

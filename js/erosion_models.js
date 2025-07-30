@@ -176,40 +176,54 @@ export class HydraulicErosionModel extends ErosionModel {
     run(encoder, iterations, params) {
         this._prepareUniforms(params);
 
+        // This new logic adds water ONLY on the first iteration of a batch.
+        // Subsequent iterations will see the existing water flow and evaporate.
         for (let i = 0; i < iterations; i++) {
             const workgroupCount = Math.ceil(this.gridSize / 16);
             const bindGroupSet = (i % 2 === 0) ? this.bindGroups.even : this.bindGroups.odd;
+            const [waterRead, waterWrite] = (i % 2 === 0) ?
+                [this.waterTextureA, this.waterTextureB] :
+                [this.waterTextureB, this.waterTextureA];
 
-            // 1. Water increment
-            let pass1 = encoder.beginComputePass();
-            pass1.setPipeline(this.pipelines.water);
-            pass1.setBindGroup(0, bindGroupSet.water);
-            pass1.dispatchWorkgroups(workgroupCount, workgroupCount);
-            pass1.end();
+            // 1. Water increment - ONLY for the first iteration of this batch.
+            if (i === 0 && params.addRain) {
+                let pass1 = encoder.beginComputePass({ label: "Water Increment Pass" });
+                pass1.setPipeline(this.pipelines.water);
+                pass1.setBindGroup(0, bindGroupSet.water);
+                pass1.dispatchWorkgroups(workgroupCount, workgroupCount);
+                pass1.end();
+            } else {
+                // For subsequent iterations, just copy the water state over to preserve it for the flow pass.
+                encoder.copyTextureToTexture(
+                    { texture: waterRead },
+                    { texture: waterWrite },
+                    { width: this.gridSize, height: this.gridSize }
+                );
+            }
 
             // 2. Flow simulation
-            let pass2 = encoder.beginComputePass();
+            let pass2 = encoder.beginComputePass({ label: "Flow Pass" });
             pass2.setPipeline(this.pipelines.flow);
             pass2.setBindGroup(0, bindGroupSet.flow);
             pass2.dispatchWorkgroups(workgroupCount, workgroupCount);
             pass2.end();
 
             // 3. Erosion and deposition
-            let pass3 = encoder.beginComputePass();
+            let pass3 = encoder.beginComputePass({ label: "Erosion Pass" });
             pass3.setPipeline(this.pipelines.erosion);
             pass3.setBindGroup(0, bindGroupSet.erosion);
             pass3.dispatchWorkgroups(workgroupCount, workgroupCount);
             pass3.end();
 
             // 4. Sediment transport
-            let pass4 = encoder.beginComputePass();
+            let pass4 = encoder.beginComputePass({ label: "Transport Pass" });
             pass4.setPipeline(this.pipelines.transport);
             pass4.setBindGroup(0, bindGroupSet.transport);
             pass4.dispatchWorkgroups(workgroupCount, workgroupCount);
             pass4.end();
 
             // 5. Evaporation
-            let pass5 = encoder.beginComputePass();
+            let pass5 = encoder.beginComputePass({ label: "Evaporation Pass" });
             pass5.setPipeline(this.pipelines.evaporation);
             pass5.setBindGroup(0, bindGroupSet.evaporation);
             pass5.dispatchWorkgroups(workgroupCount, workgroupCount);
@@ -260,8 +274,21 @@ export class HydraulicErosionModelDebug extends HydraulicErosionModel {
         const workgroupCount = Math.ceil(this.gridSize / 16);
 
         // The 5 passes of the simulation
-        // Pass 1: Water Increment
-        const pass1 = encoder.beginComputePass(); pass1.setPipeline(this.pipelines.water); pass1.setBindGroup(0, createBindGroup(this.pipelines.water.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, resources.water.read), t(6, resources.water.write) ])); pass1.dispatchWorkgroups(workgroupCount, workgroupCount); pass1.end();
+				// Pass 1: Water Increment
+        if (params.addRain) {
+            const pass1 = encoder.beginComputePass({ label: "Water Increment Pass" });
+            pass1.setPipeline(this.pipelines.water);
+            pass1.setBindGroup(0, createBindGroup(this.pipelines.water.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, resources.water.read), t(6, resources.water.write) ]));
+            pass1.dispatchWorkgroups(workgroupCount, workgroupCount);
+            pass1.end();
+        } else {
+            // If not raining, copy the current water state to the next buffer so the flow pass has the correct input.
+            encoder.copyTextureToTexture(
+                { texture: resources.water.read },
+                { texture: resources.water.write },
+                { width: gridSize, height: gridSize }
+            );
+        }
         encoder.copyTextureToBuffer({ texture: resources.water.write }, { buffer: stagingBuffers.water, bytesPerRow: r32fBytesPerRow }, { width: gridSize, height: gridSize });
 
         // Pass 2: Flow Simulation
@@ -374,4 +401,5 @@ export class SimpleErosionModel extends ErosionModel {
             pass.end();
         }
     }
+
 }

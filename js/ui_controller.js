@@ -15,6 +15,7 @@ export default class UIController {
         // Main action buttons
         document.getElementById('regenerate')?.addEventListener('click', this.callbacks.onRegenerate);
         document.getElementById('erode-terrain')?.addEventListener('click', this.callbacks.onErode);
+        document.getElementById('rain-dry-toggle')?.addEventListener('click', this.callbacks.onToggleRainDry);
         document.getElementById('reset-view')?.addEventListener('click', this.callbacks.onResetView);
         document.getElementById('snapshot-button')?.addEventListener('click', this.callbacks.onSnapshot);
 
@@ -147,8 +148,28 @@ export default class UIController {
         }
     }
 
-    toggleButton(id, isToggled) {
-        document.getElementById(id)?.classList.toggle('toggled-on', isToggled);
+    updateCaptureButtonState(isCapturing) {
+        const button = document.getElementById('capture-toggle');
+        if (!button) return;
+
+        button.dataset.capturing = String(isCapturing);
+        if (isCapturing) {
+            button.textContent = 'Capturing Data';
+        } else {
+            button.textContent = 'Start Capture';
+        }
+    }
+
+    updateRainDryButton(isRaining) {
+        const button = document.getElementById('rain-dry-toggle');
+        if (!button) return;
+
+        button.dataset.raining = String(isRaining);
+        if (isRaining) {
+            button.textContent = 'Rain';
+        } else {
+            button.textContent = 'Dry';
+        }
     }
 
     updateStats(erosion, deposition, iterations, capturedFrames) {

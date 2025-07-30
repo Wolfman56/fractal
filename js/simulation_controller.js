@@ -39,6 +39,7 @@ export default class SimulationController {
         // Erosion & Capture State
         this.totalErosionIterations = 0;
         this.lastErosionAmount = -1;
+        this.rainActive = false;
     }
 
     async init(computePipelineLayout) {
@@ -142,12 +143,18 @@ export default class SimulationController {
         this.isEroding = true;
         this.wantsUpdate = false;
 
+        // The "Erode" button should never add new water. It only works on existing water.
+        // We explicitly set `addRain` to false for all operations within this function.
+        const dryErosionParams = { ...erosionParams, addRain: false };
+
         try {
             if (this.simulationCapture.isCapturing && this.currentErosionModel instanceof HydraulicErosionModelDebug) {
+                // In debug/capture mode, run one step at a time.
+                // Each step will use the `dryErosionParams` which has `addRain: false`.
                 for (let i = 0; i < iterations; i++) {
-                    const { heights, waterHeights, erosionAmount, depositionAmount } = await this._runSingleErosionStep(erosionParams);
+                    const { heights, waterHeights, erosionAmount, depositionAmount } = await this._runSingleErosionStep(dryErosionParams);
                     this.currentModel.swapTerrainTextures();
-                    this.totalErosionIterations++;
+										this.totalErosionIterations++;
                     if (heights) {
                         this.view.updateTileMesh('0,0', heights, this.currentModel.lastGeneratedParams, waterHeights);
                         this.uiController.updateStats(erosionAmount, depositionAmount, this.totalErosionIterations, this.simulationCapture.frameCount);
@@ -155,7 +162,8 @@ export default class SimulationController {
                     }
                 }
             } else {
-                const { heights, waterHeights, erosionAmount, depositionAmount } = await this.currentModel.runErosion(iterations, erosionParams, this.currentErosionModel);
+                // In batch mode, `runErosion` will receive `addRain: false`.
+				const { heights, waterHeights, erosionAmount, depositionAmount } = await this.currentModel.runErosion(iterations, dryErosionParams, this.currentErosionModel);
                 this.totalErosionIterations += iterations;
                 this.lastErosionAmount = erosionAmount + depositionAmount;
                 if (heights) {
@@ -171,8 +179,26 @@ export default class SimulationController {
         }
     }
 
+    async toggleRainDry(erosionParams) {
+        this.rainActive = !this.rainActive;
+        this.uiController.updateRainDryButton(this.rainActive);
+
+        if (this.rainActive) {
+            // "Rain" action: add a single burst of water.
+            const stepParams = { ...erosionParams, addRain: true };
+            const { heights, waterHeights } = await this._runSingleErosionStep(stepParams);
+            this.currentModel.swapTerrainTextures();
+            this.totalErosionIterations++;
+            this.view.updateTileMesh('0,0', heights, this.currentModel.lastGeneratedParams, waterHeights);
+        } else {
+            // "Dry" action: Do nothing. The button is now just a state indicator.
+            // The user can now press "Erode" to continue the simulation with existing water.
+        }
+    }
+
     toggleCapture() {
         this.simulationCapture.toggle();
+        this.uiController.updateCaptureButtonState(this.simulationCapture.isCapturing);
     }
 
     saveCaptureData() {
@@ -182,6 +208,8 @@ export default class SimulationController {
     clearCaptureData() {
         if (this.simulationCapture.clear()) {
             this.uiController.updateStats(0, 0, this.totalErosionIterations, this.simulationCapture.frameCount);
+            // When data is cleared, capturing stops. Update the button to reflect this.
+            this.uiController.updateCaptureButtonState(this.simulationCapture.isCapturing);
         }
     }
 
@@ -199,8 +227,11 @@ export default class SimulationController {
             results = await this.currentModel.runErosion(1, erosionParams, this.currentErosionModel);
         }
 
+        // The `captureSingleStep` method doesn't calculate metrics, but `runErosion` does.
+        // To unify the return value, we always calculate metrics here based on the returned heights.
+        // The bug was that these calculated metrics were not being returned.
         const metrics = this.currentModel.calculateErosionMetrics(results.heights);
-        return results;
+        return { ...results, ...metrics }; // Combine results with metrics and return
     }
 
     changeShaderStrategy(name) {

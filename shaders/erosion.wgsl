@@ -49,22 +49,22 @@ fn main_flow(@builtin(global_invocation_id) id: vec3<u32>) {
     let pos = vec2<i32>(id.xy);
     if (pos.x >= i32(u.gridSize) || pos.y >= i32(u.gridSize)) { return; }
 
-    let h_c = textureLoad(terrain_read, pos, 0).r;
-    let w_c = textureLoad(water_read, pos, 0).r;
-    let H_c = h_c + w_c;
+    let h_c = textureLoad(terrain_read, pos, 0).r; // terrain height
+    let w_c = textureLoad(water_read, pos, 0).r; // water depth
+    let H_c = max(h_c + w_c, u.seaLevel); // total water surface height, clamped to sea level
 
     // --- FIX: Boundary checks for neighbor sampling ---
     // If a neighbor is out of bounds, its height is treated as the same as the current cell's,
     // resulting in zero flow, which correctly contains water within the map.
     let dims = vec2<i32>(textureDimensions(terrain_read));
     var H_l = H_c;
-    if (pos.x > 0) { H_l = textureLoad(terrain_read, pos + vec2(-1,0), 0).r + textureLoad(water_read, pos + vec2(-1,0), 0).r; }
+    if (pos.x > 0) { H_l = max(textureLoad(terrain_read, pos + vec2(-1,0), 0).r + textureLoad(water_read, pos + vec2(-1,0), 0).r, u.seaLevel); }
     var H_r = H_c;
-    if (pos.x < dims.x - 1) { H_r = textureLoad(terrain_read, pos + vec2(1,0), 0).r + textureLoad(water_read, pos + vec2(1,0), 0).r; }
+    if (pos.x < dims.x - 1) { H_r = max(textureLoad(terrain_read, pos + vec2(1,0), 0).r + textureLoad(water_read, pos + vec2(1,0), 0).r, u.seaLevel); }
     var H_t = H_c;
-    if (pos.y > 0) { H_t = textureLoad(terrain_read, pos + vec2(0,-1), 0).r + textureLoad(water_read, pos + vec2(0,-1), 0).r; }
+    if (pos.y > 0) { H_t = max(textureLoad(terrain_read, pos + vec2(0,-1), 0).r + textureLoad(water_read, pos + vec2(0,-1), 0).r, u.seaLevel); }
     var H_b = H_c;
-    if (pos.y < dims.y - 1) { H_b = textureLoad(terrain_read, pos + vec2(0,1), 0).r + textureLoad(water_read, pos + vec2(0,1), 0).r; }
+    if (pos.y < dims.y - 1) { H_b = max(textureLoad(terrain_read, pos + vec2(0,1), 0).r + textureLoad(water_read, pos + vec2(0,1), 0).r, u.seaLevel); }
 
     // Calculate outflow flux
     var f_l = max(0.0, H_c - H_l);
@@ -108,12 +108,25 @@ fn main_erosion(@builtin(global_invocation_id) id: vec3<u32>) {
 
     var h_out = h;
     var s_out = s;
-    if (s_diff > 0.0) { // Erosion: water has capacity to carry more sediment
-        let amount = min(s_diff, h) * u.solubility * u.dt;
-        h_out -= amount;
-        s_out += amount;
-    } else { // Deposition: water is carrying too much sediment
-        let amount = -s_diff * u.depositionRate * u.dt;
+
+    if (h > u.seaLevel) {
+        // Only allow erosion if the terrain is above sea level
+        // This prevents the seabed from being eroded.
+        // Deposition can still occur to form beaches and shelves.
+
+        // Erosion/deposition logic
+        if (s_diff > 0.0) { // Erosion: water has capacity to carry more sediment
+            let amount = min(s_diff, h) * u.solubility * u.dt;
+            h_out -= amount;
+            s_out += amount;
+        } else { // Deposition: water is carrying too much sediment
+            let amount = -s_diff * u.depositionRate * u.dt;
+            h_out += amount;
+            s_out -= amount;
+        }
+    } else {
+        // If we're below sea level, we can only deposit sediment
+        let amount = -min(s_diff, 0.0) * u.depositionRate * u.dt;
         h_out += amount;
         s_out -= amount;
     }

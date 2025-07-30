@@ -13,7 +13,7 @@ export default class SimulationCapture {
      */
     toggle() {
         this.isCapturing = !this.isCapturing;
-        this.uiController.toggleButton('capture-toggle', this.isCapturing);
+        this.uiController.updateCaptureButtonState(this.isCapturing);
         console.log(`Data capture ${this.isCapturing ? 'enabled' : 'disabled'}.`);
     }
 
@@ -43,7 +43,8 @@ export default class SimulationCapture {
     clear() {
         if (this.debugCaptureData.length > 0 && window.confirm(`Are you sure you want to clear ${this.debugCaptureData.length} captured frames?`)) {
             this.debugCaptureData = [];
-            console.log("Cleared capture data.");
+            this.isCapturing = false; // Clearing data also stops the capture.
+            console.log("Cleared capture data. Capture stopped.");
             return true;
         }
         return false;
