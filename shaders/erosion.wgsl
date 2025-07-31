@@ -110,49 +110,36 @@ fn main_flow(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 
-// --- Pass 3: Erosion and Deposition ---
+// --- Pass 3: Erosion ---
 @compute @workgroup_size(16, 16)
 fn main_erosion(@builtin(global_invocation_id) id: vec3<u32>) {
-    let pos = vec2<i32>(id.xy);
-    if (pos.x >= i32(u.gridSize) || pos.y >= i32(u.gridSize)) { return; }
-
-    let h = textureLoad(terrain_read, pos, 0).r;
-    let w = textureLoad(water_read, pos, 0).r;
-    let s = textureLoad(sediment_read, pos, 0).r;
-    let v = textureLoad(velocity_read, pos, 0).xy;
-    let v_mag = length(v);
-
-    // Calculate sediment capacity and the difference from the current sediment level
-    let C = max(u.minSlope, v_mag) * w * u.capacityFactor;
-    let s_diff = C - s;
-
-    var h_out = h;
-    var s_out = s;
-
-    if (h > u.seaLevel) {
-        // Only allow erosion if the terrain is above sea level
-        // This prevents the seabed from being eroded.
-        // Deposition can still occur to form beaches and shelves.
-
-        // Erosion/deposition logic
-        if (s_diff > 0.0) { // Erosion: water has capacity to carry more sediment
-            let amount = min(s_diff, h) * u.solubility * u.dt;
-            h_out -= amount;
-            s_out += amount;
-        } else { // Deposition: water is carrying too much sediment
-            let amount = -s_diff * u.depositionRate * u.dt;
-            h_out += amount;
-            s_out -= amount;
-        }
-    } else {
-        // If we're below sea level, we can only deposit sediment
-        let amount = -min(s_diff, 0.0) * u.depositionRate * u.dt;
-        h_out += amount;
-        s_out -= amount;
+    if (id.x >= u.gridSize || id.y >= u.gridSize) {
+        return;
     }
+    let tex_coords = vec2<i32>(id.xy);
 
-    textureStore(terrain_write, pos, vec4f(h_out));
-    textureStore(sediment_write, pos, vec4f(s_out));
+    let h_in = textureLoad(terrain_read, tex_coords, 0).r;
+    let w_in = textureLoad(water_read, tex_coords, 0).r;
+    let s_in = textureLoad(sediment_read, tex_coords, 0).r;
+    let v_in = textureLoad(velocity_read, tex_coords, 0).xy;
+
+    // Calculate sediment capacity
+    let capacity = max(u.minSlope, length(v_in)) * w_in * u.capacityFactor;
+
+    // ERODE ONLY
+    // If water has capacity, erode terrain and add to sediment
+    if (capacity > s_in) {
+        let amount_to_erode = (capacity - s_in) * u.solubility;
+        // Don't erode more than the terrain height itself
+        let final_erosion_amount = min(amount_to_erode, h_in);
+
+        textureStore(terrain_write, tex_coords, vec4<f32>(h_in - final_erosion_amount, 0.0, 0.0, 0.0));
+        textureStore(sediment_write, tex_coords, vec4<f32>(s_in + final_erosion_amount, 0.0, 0.0, 0.0));
+    } else {
+        // If no erosion, just copy the state
+        textureStore(terrain_write, tex_coords, vec4<f32>(h_in, 0.0, 0.0, 0.0));
+        textureStore(sediment_write, tex_coords, vec4<f32>(s_in, 0.0, 0.0, 0.0));
+    }
 }
 
 
@@ -179,7 +166,40 @@ fn main_transport(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 
-// --- Pass 5: Evaporation ---
+// --- Pass 5: Deposition ---
+@compute @workgroup_size(16, 16)
+fn main_deposition(@builtin(global_invocation_id) id: vec3<u32>) {
+    if (id.x >= u.gridSize || id.y >= u.gridSize) {
+        return;
+    }
+    let tex_coords = vec2<i32>(id.xy);
+
+    let h_in = textureLoad(terrain_read, tex_coords, 0).r;
+    let w_in = textureLoad(water_read, tex_coords, 0).r;
+    let s_in = textureLoad(sediment_read, tex_coords, 0).r;
+    let v_in = textureLoad(velocity_read, tex_coords, 0).xy;
+
+    // Calculate sediment capacity
+    let capacity = max(u.minSlope, length(v_in)) * w_in * u.capacityFactor;
+
+    // DEPOSIT ONLY
+    // If sediment is over capacity, deposit it onto the terrain
+    if (s_in > capacity) {
+        let amount_to_deposit = (s_in - capacity) * u.depositionRate;
+        // Don't deposit more sediment than is available
+        let final_deposit_amount = min(amount_to_deposit, s_in);
+
+        textureStore(terrain_write, tex_coords, vec4<f32>(h_in + final_deposit_amount, 0.0, 0.0, 0.0));
+        textureStore(sediment_write, tex_coords, vec4<f32>(s_in - final_deposit_amount, 0.0, 0.0, 0.0));
+    } else {
+        // If no deposition, just copy the state
+        textureStore(terrain_write, tex_coords, vec4<f32>(h_in, 0.0, 0.0, 0.0));
+        textureStore(sediment_write, tex_coords, vec4<f32>(s_in, 0.0, 0.0, 0.0));
+    }
+}
+
+
+// --- Pass 6: Evaporation ---
 @compute @workgroup_size(16, 16)
 fn main_evaporation(@builtin(global_invocation_id) id: vec3<u32>) {
     let pos = vec2<i32>(id.xy);

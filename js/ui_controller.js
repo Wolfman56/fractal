@@ -186,9 +186,10 @@ export default class UIController {
         const phaseInfo = {
             'pass1_': { name: 'Pass 1: Water Increment', colorClass: 'phase-1-color', metrics: {} },
             'pass2_': { name: 'Pass 2: Flow Simulation', colorClass: 'phase-2-color', metrics: {} },
-            'pass3_': { name: 'Pass 3: Erosion/Deposition', colorClass: 'phase-3-color', metrics: {} },
+            'pass3_': { name: 'Pass 3: Erosion', colorClass: 'phase-3-color', metrics: {} },
             'pass4_': { name: 'Pass 4: Sediment Transport', colorClass: 'phase-4-color', metrics: {} },
-            'pass5_': { name: 'Pass 5: Evaporation', colorClass: 'phase-5-color', metrics: {} },
+            'pass5_': { name: 'Pass 5: Deposition', colorClass: 'phase-5-color', metrics: {} },
+            'pass6_': { name: 'Pass 6: Evaporation', colorClass: 'phase-6-color', metrics: {} },
         };
 
         const firstFrameData = captureData[0].data;

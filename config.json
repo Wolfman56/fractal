@@ -7,11 +7,15 @@
     "cycles": 1.0,
     "seed": 42,
     "heightMultiplier": 0.5,
-    "hurst": 0.6
+    "hurst": 0.6,
+    "worldOffset": {
+      "x": 0,
+      "y": 0
+    }
   },
   "erosion": {
     "model": "hydraulic",
-    "iterations": 32,
+    "iterations": 5,
     "wetness": 0.2,
     "solubility": 0.5,
     "deposition": 0.3,
@@ -19,7 +23,7 @@
     "seaLevel": 0.15
   },
   "simulation": {
-    "shaderStrategy": "Scroll & Zoom"
+    "shaderStrategy": "Scrolling"
   },
   "ui": {
     "confirmOverwrite": true

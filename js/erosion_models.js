@@ -61,7 +61,7 @@ export class HydraulicErosionModel extends ErosionModel {
     async createPipelines() {
         const code = await fetch('/shaders/erosion.wgsl').then(res => res.text());
         const module = this.device.createShaderModule({ code });
-        const passes = ['water', 'flow', 'erosion', 'transport', 'evaporation'];
+        const passes = ['water', 'flow', 'erosion', 'transport', 'deposition', 'evaporation'];
         for (const pass of passes) {
             this.pipelines[pass] = await this.device.createComputePipeline({
                 layout: 'auto',
@@ -113,6 +113,7 @@ export class HydraulicErosionModel extends ErosionModel {
             flow:       createBindGroup(this.pipelines.flow.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, this.terrainTextureA), t(2, this.waterTextureB), t(4, this.velocityTextureA), t(8, this.velocityTextureB) ]),
             erosion:    createBindGroup(this.pipelines.erosion.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, this.terrainTextureA), t(2, this.waterTextureB), t(3, this.sedimentTextureA), t(4, this.velocityTextureB), t(5, this.terrainTextureB), t(7, this.sedimentTextureB) ]),
             transport:  createBindGroup(this.pipelines.transport.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, this.waterTextureB), t(3, this.sedimentTextureB), t(4, this.velocityTextureB), t(6, this.waterTextureA), t(7, this.sedimentTextureA) ]),
+            deposition: createBindGroup(this.pipelines.deposition.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, this.terrainTextureB), t(2, this.waterTextureA), t(3, this.sedimentTextureA), t(4, this.velocityTextureB), t(5, this.terrainTextureA), t(7, this.sedimentTextureB) ]),
             evaporation:createBindGroup(this.pipelines.evaporation.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, this.waterTextureA), t(6, this.waterTextureB) ]),
         };
 
@@ -123,6 +124,7 @@ export class HydraulicErosionModel extends ErosionModel {
             flow:       createBindGroup(this.pipelines.flow.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, this.terrainTextureB), t(2, this.waterTextureA), t(4, this.velocityTextureB), t(8, this.velocityTextureA) ]),
             erosion:    createBindGroup(this.pipelines.erosion.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, this.terrainTextureB), t(2, this.waterTextureA), t(3, this.sedimentTextureA), t(4, this.velocityTextureA), t(5, this.terrainTextureA), t(7, this.sedimentTextureB) ]),
             transport:  createBindGroup(this.pipelines.transport.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, this.waterTextureA), t(3, this.sedimentTextureB), t(4, this.velocityTextureA), t(6, this.waterTextureB), t(7, this.sedimentTextureA) ]),
+            deposition: createBindGroup(this.pipelines.deposition.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, this.terrainTextureA), t(2, this.waterTextureB), t(3, this.sedimentTextureB), t(4, this.velocityTextureA), t(5, this.terrainTextureB), t(7, this.sedimentTextureA) ]),
             evaporation:createBindGroup(this.pipelines.evaporation.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, this.waterTextureB), t(6, this.waterTextureA) ]),
         };
 
@@ -216,15 +218,22 @@ export class HydraulicErosionModel extends ErosionModel {
             pass3.dispatchWorkgroups(workgroupCount, workgroupCount);
             pass3.end();
 
-            // 4. Sediment transport
+            // 4. Sediment Transport: Moves water and suspended sediment to neighboring cells.
             let pass4 = encoder.beginComputePass({ label: "Transport Pass" });
             pass4.setPipeline(this.pipelines.transport);
             pass4.setBindGroup(0, bindGroupSet.transport);
             pass4.dispatchWorkgroups(workgroupCount, workgroupCount);
             pass4.end();
 
+            // 5. Deposition: Deposits sediment from the now-transported water onto the terrain.
+            let pass_depo = encoder.beginComputePass({ label: "Deposition Pass" });
+            pass_depo.setPipeline(this.pipelines.deposition);
+            pass_depo.setBindGroup(0, bindGroupSet.deposition);
+            pass_depo.dispatchWorkgroups(workgroupCount, workgroupCount);
+            pass_depo.end();
 
-            // 5. Evaporation
+
+            // 6. Evaporation
             let pass5 = encoder.beginComputePass({ label: "Evaporation Pass" });
             pass5.setPipeline(this.pipelines.evaporation);
             pass5.setBindGroup(0, bindGroupSet.evaporation);
@@ -255,7 +264,9 @@ export class HydraulicErosionModelDebug extends HydraulicErosionModel {
             terrainErosion: this.device.createBuffer({ size: r32fBufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
             waterTransport: this.device.createBuffer({ size: r32fBufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
             sedimentTransport: this.device.createBuffer({ size: r32fBufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
-            waterEvaporation: this.device.createBuffer({ size: r32fBufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
+            terrainDeposition: this.device.createBuffer({ size: r32fBufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
+            sedimentDeposition: this.device.createBuffer({ size: r32fBufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
+            waterEvaporationPass6: this.device.createBuffer({ size: r32fBufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
             finalTerrain: this.device.createBuffer({ size: r32fBufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
         };
 
@@ -307,18 +318,20 @@ export class HydraulicErosionModelDebug extends HydraulicErosionModel {
         encoder.copyTextureToBuffer({ texture: resources.water.read }, { buffer: stagingBuffers.waterTransport, bytesPerRow: r32fBytesPerRow }, { width: gridSize, height: gridSize });
         encoder.copyTextureToBuffer({ texture: resources.sediment.read }, { buffer: stagingBuffers.sedimentTransport, bytesPerRow: r32fBytesPerRow }, { width: gridSize, height: gridSize });
 
-        // After the transport pass, the correct sediment data is in the 'read' texture.
-        // We must copy it to the 'write' texture so that the final state swap at the
-        // end of this function works correctly.
-        encoder.copyTextureToTexture(
-            { texture: resources.sediment.read }, { texture: resources.sediment.write }, { width: gridSize, height: gridSize }
-        );
+        // Pass 5: Deposition
+        const pass_depo = encoder.beginComputePass(); pass_depo.setPipeline(this.pipelines.deposition); pass_depo.setBindGroup(0, createBindGroup(this.pipelines.deposition.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, resources.terrain.write), t(2, resources.water.read), t(3, resources.sediment.read), t(4, resources.velocity.write), t(5, resources.terrain.read), t(7, resources.sediment.write) ])); pass_depo.dispatchWorkgroups(workgroupCount, workgroupCount); pass_depo.end();
+        encoder.copyTextureToBuffer({ texture: resources.terrain.read }, { buffer: stagingBuffers.terrainDeposition, bytesPerRow: r32fBytesPerRow }, { width: gridSize, height: gridSize });
+        encoder.copyTextureToBuffer({ texture: resources.sediment.write }, { buffer: stagingBuffers.sedimentDeposition, bytesPerRow: r32fBytesPerRow }, { width: gridSize, height: gridSize });
 
-        // Pass 5: Evaporation
-        const pass5 = encoder.beginComputePass(); pass5.setPipeline(this.pipelines.evaporation); pass5.setBindGroup(0, createBindGroup(this.pipelines.evaporation.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, resources.water.read), t(6, resources.water.write) ])); pass5.dispatchWorkgroups(workgroupCount, workgroupCount); pass5.end();
-        encoder.copyTextureToBuffer({ texture: resources.water.write }, { buffer: stagingBuffers.waterEvaporation, bytesPerRow: r32fBytesPerRow }, { width: gridSize, height: gridSize });
+        // Pass 6: Evaporation
+        const pass6 = encoder.beginComputePass(); pass6.setPipeline(this.pipelines.evaporation); pass6.setBindGroup(0, createBindGroup(this.pipelines.evaporation.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, resources.water.read), t(6, resources.water.write) ])); pass6.dispatchWorkgroups(workgroupCount, workgroupCount); pass6.end();
+        encoder.copyTextureToBuffer({ texture: resources.water.write }, { buffer: stagingBuffers.waterEvaporationPass6, bytesPerRow: r32fBytesPerRow }, { width: gridSize, height: gridSize });
 
-        // The final terrain is in the "write" texture after the erosion pass.
+        // The final terrain is in the "read" texture after the deposition pass. Copy it to the
+        // "write" texture so that the final state is consistently in the 'B' textures before the swap.
+        encoder.copyTextureToTexture({ texture: resources.terrain.read }, { texture: resources.terrain.write }, { width: gridSize, height: gridSize });
+
+        // Now copy the final terrain state to the staging buffer for CPU readback.
         encoder.copyTextureToBuffer({ texture: resources.terrain.write }, { buffer: stagingBuffers.finalTerrain, bytesPerRow: r32fBytesPerRow }, { width: gridSize, height: gridSize });
 
         this.device.queue.submit([encoder.finish()]);
@@ -342,11 +355,19 @@ export class HydraulicErosionModelDebug extends HydraulicErosionModel {
         };
 
         const capturedData = {
-            pass1_water: analyzeBuffer(mappedRanges.water), pass2_velocity: analyzeBuffer(mappedRanges.velocity), pass3_terrain: analyzeBuffer(mappedRanges.terrainErosion), pass3_sediment: analyzeBuffer(mappedRanges.sedimentErosion), pass4_water: analyzeBuffer(mappedRanges.waterTransport), pass4_sediment: analyzeBuffer(mappedRanges.sedimentTransport), pass5_water: analyzeBuffer(mappedRanges.waterEvaporation),
+            pass1_water: analyzeBuffer(mappedRanges.water),
+            pass2_velocity: analyzeBuffer(mappedRanges.velocity),
+            pass3_terrain: analyzeBuffer(mappedRanges.terrainErosion),
+            pass3_sediment: analyzeBuffer(mappedRanges.sedimentErosion),
+            pass4_water: analyzeBuffer(mappedRanges.waterTransport),
+            pass4_sediment: analyzeBuffer(mappedRanges.sedimentTransport),
+            pass5_terrain: analyzeBuffer(mappedRanges.terrainDeposition),
+            pass5_sediment: analyzeBuffer(mappedRanges.sedimentDeposition),
+            pass6_water: analyzeBuffer(mappedRanges.waterEvaporationPass6),
         };
 
         const finalHeights = new Float32Array(mappedRanges.finalTerrain).slice();
-        const finalWater = new Float32Array(mappedRanges.waterEvaporation).slice();
+        const finalWater = new Float32Array(mappedRanges.waterEvaporationPass6).slice();
 
         Object.values(stagingBuffers).forEach(b => b.unmap());
         Object.values(stagingBuffers).forEach(b => b.destroy());

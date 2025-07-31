@@ -102,11 +102,12 @@ The project includes a GPU-based hydraulic erosion simulation based on the paper
     - **Debug Flow (`HydraulicErosionModelDebug`)**: This model is designed for introspection and single-stepping. Its `captureSingleStep` method performs exactly one iteration, reading from an input texture (e.g., `textureA`) and writing the result to a separate output texture (`textureB`). It **does not** copy the result back. This design requires the `SimulationController` to be an active participant in state management. After each step, the controller must explicitly swap its primary textures so that the output of the last step (`textureB`) becomes the input for the next. This contract is essential for allowing the system to capture and visualize the state after each discrete pass.
 
   - **Pipeline Steps**: Each simulation iteration involves the following passes, which use a "ping-pong" texture technique to pass state between them:
-    1.  **Water Increment**: Adds a specified amount of water (`rainAmount`) to the water map. This pass is only run when explicitly triggered.
+    1.  **Water Increment**: Adds a specified amount of water (`rainAmount`) to the water map. This pass is only run when "Rain" mode is active.
     2.  **Flow Simulation**: Calculates a 2D velocity field for the water based on the height gradient between adjacent cells.
-    3.  **Erosion & Deposition**: Modifies the terrain height. It calculates the sediment capacity of the water based on velocity and slope. If the water can carry more sediment, it erodes the terrain; if it's over capacity, it deposits sediment.
-    4.  **Sediment Transport**: Moves suspended sediment from each cell to its neighbors based on the water's velocity field.
-    5.  **Evaporation**: Reduces the water level in every cell by a small amount (`evapRate`).
+    3.  **Erosion**: Calculates how much sediment the water can carry and erodes the terrain accordingly, adding the eroded material to a suspended sediment texture.
+    4.  **Sediment Transport**: Moves the water and its suspended sediment to neighboring cells based on the velocity field calculated in Pass 2.
+    5.  **Deposition**: After transport, this pass calculates the water's new sediment capacity. If the water is carrying more sediment than it can support, it deposits the excess onto the terrain.
+    6.  **Evaporation**: Reduces the water level in every cell by a small amount (`evapRate`).
 
   - **User Control**: The UI provides an intuitive, stateful system for controlling the erosion simulation. The core controls are the **Erode Button**, the **Iterations Slider**, and the **Rain/Dry Radio Buttons**.
     - **Rain/Dry Radio Buttons**: This control sets the persistent mode for the simulation. It does not trigger any action itself, but determines the behavior of the "Erode" button.
@@ -123,10 +124,14 @@ The project includes a GPU-based hydraulic erosion simulation based on the paper
       - `Water Velocity`: Visualizes the magnitude of the 2D water flow vector.
       - `Sediment Amount`: Visualizes the amount of suspended sediment being carried by the water.
     - **Data Capture Controls**: These buttons manage a frame-by-frame capture of the simulation's internal state for offline analysis.
-      - **Start/Stop Capture Button**: Toggles the data capture mode. When active, every single simulation step (whether from the "Rain" or "Erode" button) triggers an expensive process where all intermediate textures from the 5-pass pipeline are copied from the GPU to the CPU and analyzed.
-      - **Save Capture Button**: Takes all captured frame data, serializes it into a JSON format, and initiates a browser download of the resulting `.json` file.
-      - **Clear Capture Button**: Discards all captured data from memory and resets the capture frame count.
-
+      - **Start/Stop Capture Button**: Toggles the data capture mode. When active, every single simulation step triggers an expensive process where all intermediate textures from the 6-pass pipeline are copied from the GPU to the CPU and analyzed.
+      - **Save Capture Button**: Takes all captured frame data and serializes it into a JSON format. The resulting file contains a `data` array with the per-step metrics and a `history` array that logs every user command (Erode button clicks) along with the full set of simulation parameters for that command, ensuring full reproducibility.
+      - **Clear Capture Button**: Discards all captured data and command history from memory.
+    - **Data Plotting**: A sophisticated, interactive plotting tool is available for real-time analysis of captured data.
+      - **Pop-out Window**: The plot is launched in a separate browser window, allowing it to be resized and positioned independently of the main application for easier analysis on multi-monitor setups.
+      - **Metric Selection UI**: Instead of a simple list, metrics are selected via a series of toggle buttons. These toggles are grouped first by their simulation **Phase** (e.g., "Pass 3: Erosion") and then by **Type** (e.g., "terrain", "sediment"), providing a highly intuitive way to find and select related data points.
+      - **Color-Coded Feedback**: Each simulation phase is assigned a unique color. This color is used for the phase title in the selection UI and is also applied to the corresponding subplot title and data trace in the plot window, creating a strong visual link between the controls and the output.
+      - **Stacked Subplots**: Multiple metrics can be selected and are displayed in a stacked subplot layout. Each metric gets its own chart, but they all share a common X-axis (Simulation Step), making it easy to correlate events between different data series.
 
 
 ## 7. Code Structure

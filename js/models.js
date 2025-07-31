@@ -217,11 +217,11 @@ export class BaseModel {
             encoder.copyTextureToTexture({ texture: erosionModel.waterTextureB }, { texture: erosionModel.waterTextureA }, textureSize);
             encoder.copyTextureToTexture({ texture: erosionModel.sedimentTextureB }, { texture: erosionModel.sedimentTextureA }, textureSize);
             encoder.copyTextureToTexture({ texture: erosionModel.velocityTextureB }, { texture: erosionModel.velocityTextureA }, textureSize);
-            // The terrain texture is handled next.
+            // The terrain texture is handled separately below.
         }
 
         // 3. Copy the result back into the main terrain texture.
-        const finalErodedTexture = needsStateReset ? erosionModel.terrainTextureB : erosionModel.terrainTextureA;
+        const finalErodedTexture = (iterations % 2 !== 0) ? erosionModel.terrainTextureB : erosionModel.terrainTextureA;
         encoder.copyTextureToTexture(
             { texture: finalErodedTexture },
             { texture: this.heightmapTextureA },
@@ -229,7 +229,7 @@ export class BaseModel {
         );
 
         // 4. Read back the heightmap and water map for display.
-        const finalWaterTexture = needsStateReset ? erosionModel.waterTextureB : erosionModel.waterTextureA;
+        const finalWaterTexture = (iterations % 2 !== 0) ? erosionModel.waterTextureB : erosionModel.waterTextureA;
         const waterStagingBuffer = this.device.createBuffer({ size: bufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
         encoder.copyTextureToBuffer({ texture: this.heightmapTextureA }, { buffer: this.computeStagingBuffer, bytesPerRow }, { width: this.gridSize, height: this.gridSize });
         if (finalWaterTexture) {

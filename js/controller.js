@@ -36,17 +36,25 @@ class Controller {
 
         const uiCallbacks = {
             onRegenerate: () => {
-                // A full, user-triggered regeneration should reset navigation state (like panning)
-                // to ensure the generated terrain is centered at the origin. This also fixes a
-                // bug where a transient state could cause an initial scroll.
-                if (this.inputHandler) this.inputHandler.worldOffset = { x: 0, y: 0 };
+                // A full regeneration should reset the view to its default state and clear
+                // any existing normalization data to accurately reflect the new terrain.
+                if (this.inputHandler) {
+                    this.inputHandler.worldOffset = { ...(config.generation.worldOffset || { x: 0, y: 0 }) };
+                }
+                this.view.camera.reset();
+                this.simulationController.currentModel.shaderStrategy.resetNormalization();
                 this.simulationController.wantsUpdate = true;
             },
             onErode: () => this.simulationController.erodeTerrain(this._getErosionParamsFromUI(), parseInt(document.getElementById('erosion-iterations')?.value || '10', 10)),
             onRainModeChange: (mode) => this.simulationController.setRainMode(mode),
             onResetView: () => {
+                // Resetting the view should return both the camera and the terrain's pan
+                // position to their default states, then trigger a regeneration.
+                if (this.inputHandler) {
+                    this.inputHandler.worldOffset = { ...(config.generation.worldOffset || { x: 0, y: 0 }) };
+                }
                 this.view.camera.reset();
-                this.view.drawScene(this.simulationController.viewMode);
+                this.simulationController.wantsUpdate = true;
             },
             onRedrawScene: () => this.view.drawScene(this.simulationController.viewMode),
             onSnapshot: () => this.takeSnapshot(),
@@ -72,6 +80,8 @@ class Controller {
             () => ({ currentModel: this.simulationController.currentModel }),
             () => this.simulationController.wantsUpdate = true
         );
+        // Initialize worldOffset from config
+        this.inputHandler.worldOffset = { ...(config.generation.worldOffset || { x: 0, y: 0 }) };
 
         this.uiController.populateDropdown('shader-strategy-select', Object.keys(this.simulationController.shaderStrategies), config.simulation.shaderStrategy);
         this.uiController.populateDropdown('erosion-model-select', this.simulationController.erosionModelDisplayNames, config.erosion.model);

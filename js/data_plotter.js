@@ -12,7 +12,8 @@ export default class DataPlotter {
             'pass2_': '#4ec9b0', // Teal
             'pass3_': '#ce9178', // Orange
             'pass4_': '#c586c0', // Purple
-            'pass5_': '#9cdcfe', // Light Blue
+            'pass5_': '#9cdcfe', // Light Blue (Deposition)
+            'pass6_': '#d4d4d4', // Gray (Evaporation)
         };
     }
 

@@ -10,6 +10,7 @@
     --phase-3-color: #ce9178; /* Orange/Brown */
     --phase-4-color: #c586c0; /* Purple */
     --phase-5-color: #9cdcfe; /* Light Blue */
+    --phase-6-color: #d4d4d4; /* Gray */
     --font-family: 'Inter', sans-serif;
 }
 
@@ -291,6 +292,7 @@ button:hover {
 .phase-3-color { color: var(--phase-3-color); }
 .phase-4-color { color: var(--phase-4-color); }
 .phase-5-color { color: var(--phase-5-color); }
+.phase-6-color { color: var(--phase-6-color); }
 
 .metric-phase-group h5 {
     margin: 8px 0 4px 0;

@@ -171,11 +171,24 @@ export default class SimulationController {
                     this.totalErosionIterations++;
                     if (heights) {
                         this.view.updateTileMesh('0,0', heights, this.currentModel.lastGeneratedParams, waterHeights);
+                        this.currentModel.lastGeneratedHeightmap = heights; // Keep CPU-side cache in sync
                         this.uiController.updateStats(erosionAmount, depositionAmount, this.totalErosionIterations, this.simulationCapture.frameCount);
                         // After each step, we must manually update uniforms and draw the scene.
                         this.view.updateGlobalParams(stepParams.seaLevel, this.viewMode);
                         this.view.drawScene(this.viewMode);
                     }
+                }
+                // After the debug loop, the final state is on the GPU. We need to read it back
+                // to the CPU cache to ensure consistency with the standard erosion path.
+                const { bytesPerRow, bufferSize } = getPaddedByteRange(this.currentModel.gridSize, this.currentModel.gridSize, 4);
+                const stagingBuffer = this.device.createBuffer({ size: bufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+                const encoder = this.device.createCommandEncoder();
+                encoder.copyTextureToBuffer({ texture: this.currentModel.heightmapTextureA }, { buffer: stagingBuffer, bytesPerRow }, { width: this.currentModel.gridSize, height: this.currentModel.gridSize });
+                this.device.queue.submit([encoder.finish()]);
+                await stagingBuffer.mapAsync(GPUMapMode.READ);
+                const finalHeights = this.currentModel._unpadBuffer(stagingBuffer.getMappedRange(), this.currentModel.gridSize, this.currentModel.gridSize, bytesPerRow);
+                if (finalHeights) {
+                    this.currentModel.lastGeneratedHeightmap = finalHeights;
                 }
             } else {
                 // In batch mode, `runErosion` will receive the addRain flag from the toggle.
