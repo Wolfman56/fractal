@@ -6,6 +6,7 @@ export default class SimulationCapture {
         this.uiController = uiController;
         this.isCapturing = false;
         this.debugCaptureData = [];
+        this.commandHistory = [];
     }
 
     /**
@@ -25,7 +26,11 @@ export default class SimulationCapture {
             alert("No debug data captured.");
             return;
         }
-        const dataStr = JSON.stringify(this.debugCaptureData, null, 2);
+        const saveData = {
+            history: this.commandHistory,
+            data: this.debugCaptureData
+        };
+        const dataStr = JSON.stringify(saveData, null, 2);
         const blob = new Blob([dataStr], { type: "application/json" });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
@@ -42,6 +47,7 @@ export default class SimulationCapture {
      */
     clear() {
         if (this.debugCaptureData.length > 0 && window.confirm(`Are you sure you want to clear ${this.debugCaptureData.length} captured frames?`)) {
+            this.commandHistory = [];
             this.debugCaptureData = [];
             this.isCapturing = false; // Clearing data also stops the capture.
             console.log("Cleared capture data. Capture stopped.");
@@ -58,6 +64,15 @@ export default class SimulationCapture {
     addFrame(frameNumber, data) {
         if (!this.isCapturing || !data) return;
         this.debugCaptureData.push({ frame: frameNumber, data });
+    }
+
+    /**
+     * Records a user-initiated command if capturing is active.
+     * @param {object} command - The command details to record.
+     */
+    recordCommand(command) {
+        if (!this.isCapturing) return;
+        this.commandHistory.push(command);
     }
 
     /**

@@ -95,6 +95,39 @@ The project includes a GPU-based hydraulic erosion simulation based on the paper
 - **Implementation**: The simulation is performed in a compute shader (`erosion.wgsl`).
 - **Ping-Pong Textures**: It uses two `r32float` textures (`heightmapTextureA`, `heightmapTextureB`) to iteratively update the heightmap. In each iteration, it reads from one texture and writes the eroded result to the other, swapping roles in the next iteration. This is a standard and efficient technique for iterative GPU algorithms.
 - **State**: The `Model` manages the erosion state, including the current textures and an erosion frame counter. The simulation can be run for a set number of iterations or animated frame-by-frame.
+- **Simulation Flow**: The simulation relies on sophisticated multi-pass processing using WebGPU compute kernels. It is implemented as a sequence of five distinct compute shader passes that are executed for each iteration. The system supports two modes: a highly efficient **Standard Flow** for real-time interaction, and a **Debug Flow** for detailed analysis.
+
+  - **State Management and Flow Differences**: The Standard and Debug flows, while executing the same core simulation passes, have a critical difference in their state management contracts, which impacts how the `SimulationController` interacts with them:
+    - **Standard Flow (`HydraulicErosionModel`)**: This model is optimized for performance and simplicity of use. Its `runErosion` method is a self-contained operation. It takes the current terrain texture as input, runs the requested number of iterations internally (ping-ponging between its private textures), and importantly, copies the final eroded terrain **back into the original input texture**. This means the controller can treat it as a "black box" and does not need to manage texture swaps after the operation is complete.
+    - **Debug Flow (`HydraulicErosionModelDebug`)**: This model is designed for introspection and single-stepping. Its `captureSingleStep` method performs exactly one iteration, reading from an input texture (e.g., `textureA`) and writing the result to a separate output texture (`textureB`). It **does not** copy the result back. This design requires the `SimulationController` to be an active participant in state management. After each step, the controller must explicitly swap its primary textures so that the output of the last step (`textureB`) becomes the input for the next. This contract is essential for allowing the system to capture and visualize the state after each discrete pass.
+
+  - **Pipeline Steps**: Each simulation iteration involves the following passes, which use a "ping-pong" texture technique to pass state between them:
+    1.  **Water Increment**: Adds a specified amount of water (`rainAmount`) to the water map. This pass is only run when explicitly triggered.
+    2.  **Flow Simulation**: Calculates a 2D velocity field for the water based on the height gradient between adjacent cells.
+    3.  **Erosion & Deposition**: Modifies the terrain height. It calculates the sediment capacity of the water based on velocity and slope. If the water can carry more sediment, it erodes the terrain; if it's over capacity, it deposits sediment.
+    4.  **Sediment Transport**: Moves suspended sediment from each cell to its neighbors based on the water's velocity field.
+    5.  **Evaporation**: Reduces the water level in every cell by a small amount (`evapRate`).
+
+  - **User Control**: The UI provides an intuitive, stateful system for controlling the erosion simulation. The core controls are the **Erode Button**, the **Iterations Slider**, and the **Rain/Dry Radio Buttons**.
+    - **Rain/Dry Radio Buttons**: This control sets the persistent mode for the simulation. It does not trigger any action itself, but determines the behavior of the "Erode" button.
+      - **Dry**: When selected, any simulation run will process only the existing water on the terrain. No new water is added.
+      - **Rain**: When selected, every iteration of the simulation will begin with the *Water Increment* pass, effectively simulating continuous rainfall.
+    - **Erode Button & Iterations Slider**: These controls work together to execute the simulation.
+      - The **Iterations Slider** sets the number of full simulation cycles that will be executed when the "Erode" button is pressed.
+      - The **Erode Button** is the primary action trigger. It runs the simulation for the specified number of iterations, adhering to the mode set by the Rain/Dry radio buttons. For immediate visual feedback, the button's color changes to blue when in "Rain" mode and brown when in "Dry" mode.
+
+  - **Debug Controls**: When the "Hydraulic (Debug)" model is selected, a special debug UI is enabled, offering powerful tools for introspection and analysis.
+    - **View Mode Dropdown**: This control switches the main renderer to display a live heatmap of different data textures from the simulation, which is invaluable for visualizing the simulation's internal state.
+      - `Standard`: The default photorealistic terrain view.
+      - `Water Depth`: Visualizes the amount of water in each cell.
+      - `Water Velocity`: Visualizes the magnitude of the 2D water flow vector.
+      - `Sediment Amount`: Visualizes the amount of suspended sediment being carried by the water.
+    - **Data Capture Controls**: These buttons manage a frame-by-frame capture of the simulation's internal state for offline analysis.
+      - **Start/Stop Capture Button**: Toggles the data capture mode. When active, every single simulation step (whether from the "Rain" or "Erode" button) triggers an expensive process where all intermediate textures from the 5-pass pipeline are copied from the GPU to the CPU and analyzed.
+      - **Save Capture Button**: Takes all captured frame data, serializes it into a JSON format, and initiates a browser download of the resulting `.json` file.
+      - **Clear Capture Button**: Discards all captured data from memory and resets the capture frame count.
+
+
 
 ## 7. Code Structure
 ```

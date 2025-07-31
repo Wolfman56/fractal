@@ -76,8 +76,8 @@ export class HydraulicErosionModel extends ErosionModel {
         [this.uniformsBuffer, this.waterTextureA, this.waterTextureB, this.sedimentTextureA,
          this.sedimentTextureB, this.velocityTextureA, this.velocityTextureB, this.terrainTextureA, this.terrainTextureB].forEach(r => r?.destroy());
 
-        // Increased size to 44 bytes to accommodate the new 'seaLevel' f32 uniform.
-        this.uniformsBuffer = this.device.createBuffer({ size: 44, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        // Buffer size is 48 bytes to hold all uniforms including the new heightMultiplier.
+        this.uniformsBuffer = this.device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
 
         const r32fDescriptor = {
             size: [gridSize, gridSize],
@@ -122,7 +122,7 @@ export class HydraulicErosionModel extends ErosionModel {
             water:      createBindGroup(this.pipelines.water.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, this.waterTextureB), t(6, this.waterTextureA) ]),
             flow:       createBindGroup(this.pipelines.flow.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, this.terrainTextureB), t(2, this.waterTextureA), t(4, this.velocityTextureB), t(8, this.velocityTextureA) ]),
             erosion:    createBindGroup(this.pipelines.erosion.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, this.terrainTextureB), t(2, this.waterTextureA), t(3, this.sedimentTextureA), t(4, this.velocityTextureA), t(5, this.terrainTextureA), t(7, this.sedimentTextureB) ]),
-            transport:  createBindGroup(this.pipelines.transport.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, this.waterTextureA), t(3, this.sedimentTextureA), t(4, this.velocityTextureA), t(6, this.waterTextureB), t(7, this.sedimentTextureB) ]),
+            transport:  createBindGroup(this.pipelines.transport.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, this.waterTextureA), t(3, this.sedimentTextureB), t(4, this.velocityTextureA), t(6, this.waterTextureB), t(7, this.sedimentTextureA) ]),
             evaporation:createBindGroup(this.pipelines.evaporation.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, this.waterTextureB), t(6, this.waterTextureA) ]),
         };
 
@@ -151,8 +151,8 @@ export class HydraulicErosionModel extends ErosionModel {
     }
 
     _prepareUniforms(params) {
-        // Buffer now holds 11 floats (44 bytes)
-        const uniformData = new Float32Array(11);
+        // Buffer now holds 12 floats (48 bytes) to accommodate heightMultiplier
+        const uniformData = new Float32Array(12);
         const uniformDataU32 = new Uint32Array(uniformData.buffer);
 
         // --- Simulation Tuning Parameters ---
@@ -170,14 +170,15 @@ export class HydraulicErosionModel extends ErosionModel {
         uniformData[7] = params.rainAmount;
         uniformData[8] = params.seaLevel;
         uniformDataU32[9] = this.gridSize;
+        uniformData[10] = params.heightMultiplier;
         this.device.queue.writeBuffer(this.uniformsBuffer, 0, uniformData);
     }
 
     run(encoder, iterations, params) {
         this._prepareUniforms(params);
 
-        // This new logic adds water ONLY on the first iteration of a batch.
-        // Subsequent iterations will see the existing water flow and evaporate.
+        // This loop runs the full 5-pass simulation for each iteration.
+        // If params.addRain is true, water will be added in every single iteration.
         for (let i = 0; i < iterations; i++) {
             const workgroupCount = Math.ceil(this.gridSize / 16);
             const bindGroupSet = (i % 2 === 0) ? this.bindGroups.even : this.bindGroups.odd;
@@ -185,15 +186,15 @@ export class HydraulicErosionModel extends ErosionModel {
                 [this.waterTextureA, this.waterTextureB] :
                 [this.waterTextureB, this.waterTextureA];
 
-            // 1. Water increment - ONLY for the first iteration of this batch.
-            if (i === 0 && params.addRain) {
+            // 1. Water increment - Adds water if the 'addRain' flag is set.
+            if (params.addRain) {
                 let pass1 = encoder.beginComputePass({ label: "Water Increment Pass" });
                 pass1.setPipeline(this.pipelines.water);
                 pass1.setBindGroup(0, bindGroupSet.water);
                 pass1.dispatchWorkgroups(workgroupCount, workgroupCount);
                 pass1.end();
             } else {
-                // For subsequent iterations, just copy the water state over to preserve it for the flow pass.
+                // If not raining, just copy the water state over to preserve it for the flow pass.
                 encoder.copyTextureToTexture(
                     { texture: waterRead },
                     { texture: waterWrite },
@@ -221,6 +222,7 @@ export class HydraulicErosionModel extends ErosionModel {
             pass4.setBindGroup(0, bindGroupSet.transport);
             pass4.dispatchWorkgroups(workgroupCount, workgroupCount);
             pass4.end();
+
 
             // 5. Evaporation
             let pass5 = encoder.beginComputePass({ label: "Evaporation Pass" });
@@ -304,6 +306,13 @@ export class HydraulicErosionModelDebug extends HydraulicErosionModel {
         const pass4 = encoder.beginComputePass(); pass4.setPipeline(this.pipelines.transport); pass4.setBindGroup(0, createBindGroup(this.pipelines.transport.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, resources.water.write), t(3, resources.sediment.write), t(4, resources.velocity.write), t(6, resources.water.read), t(7, resources.sediment.read) ])); pass4.dispatchWorkgroups(workgroupCount, workgroupCount); pass4.end();
         encoder.copyTextureToBuffer({ texture: resources.water.read }, { buffer: stagingBuffers.waterTransport, bytesPerRow: r32fBytesPerRow }, { width: gridSize, height: gridSize });
         encoder.copyTextureToBuffer({ texture: resources.sediment.read }, { buffer: stagingBuffers.sedimentTransport, bytesPerRow: r32fBytesPerRow }, { width: gridSize, height: gridSize });
+
+        // After the transport pass, the correct sediment data is in the 'read' texture.
+        // We must copy it to the 'write' texture so that the final state swap at the
+        // end of this function works correctly.
+        encoder.copyTextureToTexture(
+            { texture: resources.sediment.read }, { texture: resources.sediment.write }, { width: gridSize, height: gridSize }
+        );
 
         // Pass 5: Evaporation
         const pass5 = encoder.beginComputePass(); pass5.setPipeline(this.pipelines.evaporation); pass5.setBindGroup(0, createBindGroup(this.pipelines.evaporation.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, resources.water.read), t(6, resources.water.write) ])); pass5.dispatchWorkgroups(workgroupCount, workgroupCount); pass5.end();

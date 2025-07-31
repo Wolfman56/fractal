@@ -207,8 +207,21 @@ export class BaseModel {
         // 2. Run the self-contained erosion simulation.
         erosionModel.run(encoder, iterations, params);
 
+        // After a batch run, we need to ensure the 'A' textures hold the final state
+        // to be consistent with single-step runs. If an odd number of iterations ran,
+        // the final data is in the 'B' textures, so we must copy it back to 'A'.
+        const needsStateReset = iterations % 2 !== 0;
+        if (needsStateReset && erosionModel.waterTextureB) { // Check if textures exist
+            const textureSize = { width: erosionGridSize, height: erosionGridSize };
+            // Copy B -> A for all erosion textures to reset the state for the next operation.
+            encoder.copyTextureToTexture({ texture: erosionModel.waterTextureB }, { texture: erosionModel.waterTextureA }, textureSize);
+            encoder.copyTextureToTexture({ texture: erosionModel.sedimentTextureB }, { texture: erosionModel.sedimentTextureA }, textureSize);
+            encoder.copyTextureToTexture({ texture: erosionModel.velocityTextureB }, { texture: erosionModel.velocityTextureA }, textureSize);
+            // The terrain texture is handled next.
+        }
+
         // 3. Copy the result back into the main terrain texture.
-        const finalErodedTexture = erosionModel.getFinalTerrainTexture(iterations);
+        const finalErodedTexture = needsStateReset ? erosionModel.terrainTextureB : erosionModel.terrainTextureA;
         encoder.copyTextureToTexture(
             { texture: finalErodedTexture },
             { texture: this.heightmapTextureA },
@@ -216,7 +229,7 @@ export class BaseModel {
         );
 
         // 4. Read back the heightmap and water map for display.
-        const finalWaterTexture = (iterations % 2 === 0) ? erosionModel.waterTextureA : erosionModel.waterTextureB;
+        const finalWaterTexture = needsStateReset ? erosionModel.waterTextureB : erosionModel.waterTextureA;
         const waterStagingBuffer = this.device.createBuffer({ size: bufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
         encoder.copyTextureToBuffer({ texture: this.heightmapTextureA }, { buffer: this.computeStagingBuffer, bytesPerRow }, { width: this.gridSize, height: this.gridSize });
         if (finalWaterTexture) {
@@ -259,12 +272,6 @@ export class BaseModel {
                 totalDeposition /= numPoints;
             }
         }
-
-        // Copy the final eroded heights back to both terrain textures to ensure consistency for the next erosion run
-        const { paddedBuffer: paddedHeights, bytesPerRow: paddedBPR } = padBuffer(erodedHeights, this.gridSize, this.gridSize);
-        const textureSize = { width: this.gridSize, height: this.gridSize };
-        this.device.queue.writeTexture({ texture: this.heightmapTextureA }, paddedHeights, { bytesPerRow: paddedBPR }, textureSize);
-        this.device.queue.writeTexture({ texture: this.heightmapTextureB }, paddedHeights, { bytesPerRow: paddedBPR }, textureSize);
 
         return { heights: erodedHeights, waterHeights, erosionAmount: totalErosion, depositionAmount: totalDeposition };
     }

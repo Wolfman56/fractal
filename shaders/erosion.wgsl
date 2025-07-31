@@ -15,6 +15,7 @@ struct Uniforms {
     rainAmount: f32,
     seaLevel: f32,
     gridSize: u32,
+    heightMultiplier: f32,
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
@@ -48,29 +49,48 @@ fn main_water(@builtin(global_invocation_id) id: vec3<u32>) {
 fn main_flow(@builtin(global_invocation_id) id: vec3<u32>) {
     let pos = vec2<i32>(id.xy);
     if (pos.x >= i32(u.gridSize) || pos.y >= i32(u.gridSize)) { return; }
+    
+    let h_c = textureLoad(terrain_read, pos, 0).r;
+    let w_c = textureLoad(water_read, pos, 0).r;
+    
+    // Apply height multiplier to terrain and sea level to get world-space heights for flow calculation
+    let world_sea_level = u.seaLevel * u.heightMultiplier;
+    let H_c = max(h_c * u.heightMultiplier + w_c, world_sea_level);
 
-    let h_c = textureLoad(terrain_read, pos, 0).r; // terrain height
-    let w_c = textureLoad(water_read, pos, 0).r; // water depth
-    let H_c = max(h_c + w_c, u.seaLevel); // total water surface height, clamped to sea level
-
-    // --- FIX: Boundary checks for neighbor sampling ---
-    // If a neighbor is out of bounds, its height is treated as the same as the current cell's,
-    // resulting in zero flow, which correctly contains water within the map.
+    // --- Calculate outflow flux to neighbors ---
     let dims = vec2<i32>(textureDimensions(terrain_read));
-    var H_l = H_c;
-    if (pos.x > 0) { H_l = max(textureLoad(terrain_read, pos + vec2(-1,0), 0).r + textureLoad(water_read, pos + vec2(-1,0), 0).r, u.seaLevel); }
-    var H_r = H_c;
-    if (pos.x < dims.x - 1) { H_r = max(textureLoad(terrain_read, pos + vec2(1,0), 0).r + textureLoad(water_read, pos + vec2(1,0), 0).r, u.seaLevel); }
-    var H_t = H_c;
-    if (pos.y > 0) { H_t = max(textureLoad(terrain_read, pos + vec2(0,-1), 0).r + textureLoad(water_read, pos + vec2(0,-1), 0).r, u.seaLevel); }
-    var H_b = H_c;
-    if (pos.y < dims.y - 1) { H_b = max(textureLoad(terrain_read, pos + vec2(0,1), 0).r + textureLoad(water_read, pos + vec2(0,1), 0).r, u.seaLevel); }
+    var f_l: f32;
+    var f_r: f32;
+    var f_t: f32;
+    var f_b: f32;
 
-    // Calculate outflow flux
-    var f_l = max(0.0, H_c - H_l);
-    var f_r = max(0.0, H_c - H_r);
-    var f_t = max(0.0, H_c - H_t);
-    var f_b = max(0.0, H_c - H_b);
+    // Left neighbor
+    if (pos.x > 0) {
+        let h_n = textureLoad(terrain_read, pos + vec2(-1,0), 0).r;
+        let w_n = textureLoad(water_read, pos + vec2(-1,0), 0).r;
+        f_l = max(0.0, H_c - max(h_n * u.heightMultiplier + w_n, world_sea_level));
+    } else { f_l = 0.0; }
+
+    // Right neighbor
+    if (pos.x < dims.x - 1) {
+        let h_n = textureLoad(terrain_read, pos + vec2(1,0), 0).r;
+        let w_n = textureLoad(water_read, pos + vec2(1,0), 0).r;
+        f_r = max(0.0, H_c - max(h_n * u.heightMultiplier + w_n, world_sea_level));
+    } else { f_r = 0.0; }
+
+    // Top neighbor
+    if (pos.y > 0) {
+        let h_n = textureLoad(terrain_read, pos + vec2(0,-1), 0).r;
+        let w_n = textureLoad(water_read, pos + vec2(0,-1), 0).r;
+        f_t = max(0.0, H_c - max(h_n * u.heightMultiplier + w_n, world_sea_level));
+    } else { f_t = 0.0; }
+
+    // Bottom neighbor
+    if (pos.y < dims.y - 1) {
+        let h_n = textureLoad(terrain_read, pos + vec2(0,1), 0).r;
+        let w_n = textureLoad(water_read, pos + vec2(0,1), 0).r;
+        f_b = max(0.0, H_c - max(h_n * u.heightMultiplier + w_n, world_sea_level));
+    } else { f_b = 0.0; }
 
     // Scale total outflow to not exceed the amount of water in the current cell
     let f_total = f_l + f_r + f_t + f_b;

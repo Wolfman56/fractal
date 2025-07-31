@@ -7,6 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -55,14 +56,26 @@
                     <label><span>Sea Level</span><input type="range" id="erosion-sea-level" min="0.0" max="1.0" step="0.01"><span id="erosion-sea-level-value"></span></label>
                 </div>
                 <div class="action-button-container">
-                    <button id="erode-terrain" title="Run erosion simulation on the existing water.">Erode</button>
-                    <button id="rain-dry-toggle" data-raining="false" title="Toggle between adding water and drying the terrain.">Dry</button>
+                    <button id="erode-terrain" title="Run the erosion simulation with the current settings.">Erode</button>
+                    <div class="radio-group" id="rain-mode-group">
+                        <label><input type="radio" name="rain-mode" value="dry" checked> Dry</label>
+                        <label><input type="radio" name="rain-mode" value="rain"> Rain</label>
+                    </div>
                 </div>
             </details>
 
             <details id="debug-section" class="control-section">
                 <summary>Debug</summary>
                 <div class="control-group">
+                    <label id="view-mode-label">
+                        <span>View Mode</span>
+                        <select id="debug-view-mode-select">
+                            <option value="standard" selected>Standard</option>
+                            <option value="water-depth">Water Depth</option>
+                            <option value="water-velocity">Water Velocity</option>
+                            <option value="sediment">Sediment Amount</option>
+                        </select>
+                    </label>
                     <div id="erosion-debug-actions">
                         <button id="capture-toggle" title="Toggle capturing intermediate data on each erosion step.">Start Capture</button>
                         <div class="button-group">
@@ -76,6 +89,12 @@
                         <div class="stat-line"><span>Iterations</span><span id="stat-iterations">0</span></div>
                         <div class="stat-line"><span>Frames Captured</span><span id="stat-capture">0</span></div>
                     </div>
+                    <hr>
+                    <label>
+                        <span>Metric Toggles</span>
+                        <div id="plot-metric-toggles"></div>
+                    </label>
+                    <button id="show-plot-window" class="button-secondary">Show Plot Window</button>
                 </div>
             </details>
         </aside>

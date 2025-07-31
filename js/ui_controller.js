@@ -15,9 +15,13 @@ export default class UIController {
         // Main action buttons
         document.getElementById('regenerate')?.addEventListener('click', this.callbacks.onRegenerate);
         document.getElementById('erode-terrain')?.addEventListener('click', this.callbacks.onErode);
-        document.getElementById('rain-dry-toggle')?.addEventListener('click', this.callbacks.onToggleRainDry);
         document.getElementById('reset-view')?.addEventListener('click', this.callbacks.onResetView);
         document.getElementById('snapshot-button')?.addEventListener('click', this.callbacks.onSnapshot);
+
+        // Rain mode radio buttons
+        document.querySelectorAll('input[name="rain-mode"]').forEach(radio => {
+            radio.addEventListener('change', (e) => this.callbacks.onRainModeChange(e.target.value));
+        });
 
         // Debug/Capture buttons
         document.getElementById('capture-toggle')?.addEventListener('click', this.callbacks.onToggleCapture);
@@ -35,6 +39,15 @@ export default class UIController {
             this.callbacks.onErosionModelChange(e.target.value);
             this.toggleDebugSection(e.target.value);
         });
+        document.getElementById('debug-view-mode-select')?.addEventListener('change', e => this.callbacks.onViewModeChange(e.target.value));
+        document.getElementById('plot-metric-toggles')?.addEventListener('change', e => {
+            if (e.target.type === 'checkbox') {
+                const checkedBoxes = document.querySelectorAll('#plot-metric-toggles input[type="checkbox"]:checked');
+                const selectedMetrics = Array.from(checkedBoxes).map(cb => cb.value);
+                this.callbacks.onPlotMetricChange(selectedMetrics);
+            }
+        });
+        document.getElementById('show-plot-window')?.addEventListener('click', this.callbacks.onShowPlotWindow);
 
         // Sliders that trigger regeneration
         const regenSliderIds = ['gridSize', 'octaves', 'persistence', 'lacunarity', 'cycles', 'seed', 'heightMultiplier', 'hurst'];
@@ -106,6 +119,16 @@ export default class UIController {
             confirmCheckbox.checked = this.config.ui.confirmOverwrite;
         }
 
+        // Set initial rain mode state from config, defaulting to 'dry'
+        const initialRainMode = this.config.erosion.rainMode || 'dry';
+        const rainRadio = document.querySelector(`input[name="rain-mode"][value="${initialRainMode}"]`);
+        if (rainRadio) {
+            rainRadio.checked = true;
+        }
+        
+        // Set the initial color of the Erode button to match the rain mode.
+        this.updateErodeButtonState(initialRainMode === 'rain');
+
         // Set initial state for debug section visibility based on the configured erosion model
         this.toggleDebugSection(this.config.erosion.model);
     }
@@ -148,6 +171,108 @@ export default class UIController {
         }
     }
 
+    populatePlotMetrics(captureData) {
+        const container = document.getElementById('plot-metric-toggles');
+        if (!container) return;
+
+        // Don't repopulate if it's already full of controls
+        if (container.children.length > 0) return;
+
+        if (!captureData || captureData.length === 0 || !captureData[0].data) {
+            container.textContent = 'No data to plot.';
+            return;
+        }
+
+        const phaseInfo = {
+            'pass1_': { name: 'Pass 1: Water Increment', colorClass: 'phase-1-color', metrics: {} },
+            'pass2_': { name: 'Pass 2: Flow Simulation', colorClass: 'phase-2-color', metrics: {} },
+            'pass3_': { name: 'Pass 3: Erosion/Deposition', colorClass: 'phase-3-color', metrics: {} },
+            'pass4_': { name: 'Pass 4: Sediment Transport', colorClass: 'phase-4-color', metrics: {} },
+            'pass5_': { name: 'Pass 5: Evaporation', colorClass: 'phase-5-color', metrics: {} },
+        };
+
+        const firstFrameData = captureData[0].data;
+        for (const passKey in firstFrameData) { // e.g., pass1_water
+            for (const propKey in firstFrameData[passKey]) { // e.g., sum
+                for (const phasePrefix in phaseInfo) {
+                    if (passKey.startsWith(phasePrefix)) {
+                        if (!phaseInfo[phasePrefix].metrics[passKey]) {
+                            phaseInfo[phasePrefix].metrics[passKey] = [];
+                        }
+                        phaseInfo[phasePrefix].metrics[passKey].push(propKey);
+                        break;
+                    }
+                }
+            }
+        }
+
+        container.innerHTML = ''; // Clear
+        for (const phasePrefix in phaseInfo) {
+            const phase = phaseInfo[phasePrefix];
+            if (Object.keys(phase.metrics).length === 0) continue;
+
+            const groupEl = document.createElement('div');
+            groupEl.className = 'metric-phase-group';
+            const titleEl = document.createElement('h4');
+            titleEl.textContent = phase.name;
+            titleEl.className = phase.colorClass;
+            groupEl.appendChild(titleEl);
+
+            const sortedPassKeys = Object.keys(phase.metrics).sort();
+            for (const passKey of sortedPassKeys) {
+                // Create a sub-heading for the metric type (e.g., "water", "terrain")
+                const typeName = passKey.replace(phasePrefix, '').replace(/_/g, ' ');
+                const typeTitleEl = document.createElement('h5');
+                typeTitleEl.textContent = typeName;
+                groupEl.appendChild(typeTitleEl);
+
+                const togglesWrapper = document.createElement('div');
+                togglesWrapper.className = 'metric-toggles-wrapper';
+                for (const propKey of phase.metrics[passKey].sort()) { // e.g., 'sum', 'avg'
+                    const fullMetricKey = `${passKey}.${propKey}`;
+                    const toggleEl = document.createElement('div');
+                    toggleEl.className = 'metric-toggle';
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.id = `metric-toggle-${fullMetricKey}`;
+                    checkbox.value = fullMetricKey;
+                    const label = document.createElement('label');
+                    label.htmlFor = checkbox.id;
+                    label.textContent = propKey;
+                    toggleEl.appendChild(checkbox);
+                    toggleEl.appendChild(label);
+                    togglesWrapper.appendChild(toggleEl);
+                }
+                groupEl.appendChild(togglesWrapper);
+            }
+            container.appendChild(groupEl);
+        }
+
+        // By default, check the first available metric to show a plot immediately.
+        const firstCheckbox = container.querySelector('input[type="checkbox"]');
+        if (firstCheckbox) {
+            firstCheckbox.checked = true;
+            this.callbacks.onPlotMetricChange([firstCheckbox.value]);
+        }
+    }
+
+    /**
+     * Updates the visual state (color) of the Erode button to match the current rain mode.
+     * @param {boolean} isRaining - True if the current mode is 'rain', false otherwise.
+     */
+    updateErodeButtonState(isRaining) {
+        const button = document.getElementById('erode-terrain');
+        if (!button) return;
+
+        if (isRaining) {
+            button.classList.remove('state-dry');
+            button.classList.add('state-rain');
+        } else {
+            button.classList.remove('state-rain');
+            button.classList.add('state-dry');
+        }
+    }
+
     updateCaptureButtonState(isCapturing) {
         const button = document.getElementById('capture-toggle');
         if (!button) return;
@@ -157,18 +282,6 @@ export default class UIController {
             button.textContent = 'Capturing Data';
         } else {
             button.textContent = 'Start Capture';
-        }
-    }
-
-    updateRainDryButton(isRaining) {
-        const button = document.getElementById('rain-dry-toggle');
-        if (!button) return;
-
-        button.dataset.raining = String(isRaining);
-        if (isRaining) {
-            button.textContent = 'Rain';
-        } else {
-            button.textContent = 'Dry';
         }
     }
 

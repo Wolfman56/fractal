@@ -13,6 +13,7 @@ export default class View {
 
         // Pipelines
         this.renderPipeline = null;
+        this.flowRenderPipeline = null;
 
         // GPU Resources for a single mesh
         this.indexFormat = 'uint16';
@@ -21,6 +22,11 @@ export default class View {
         this.viewBuffer = null;
         this.globalParamsBuffer = null;
         this.depthTexture = null;
+
+        // Resources for the flow heatmap view
+        this.flowRenderBindGroup = null;
+        this.linearSampler = null;
+        this.nearestSampler = null;
 
         this.tiles = new Map(); // Manages the collection of visible tiles
         this.camera = new Camera();
@@ -33,6 +39,15 @@ export default class View {
         }
         const adapter = await navigator.gpu.requestAdapter();
 
+        const requiredFeatures = [];
+        // The flow heatmap uses linear filtering on an rgba32float texture. This requires
+        // the 'float32-filterable' feature, which is optional. We must request it.
+        if (adapter.features.has('float32-filterable')) {
+            requiredFeatures.push('float32-filterable');
+        } else {
+            console.error("CRITICAL: Adapter does not support 'float32-filterable'. The Flow Heatmap view will not function.");
+        }
+
         const requiredLimits = {};
         // The erosion shader requires up to 8 storage textures.
         // We check if the adapter supports this and request it.
@@ -42,7 +57,7 @@ export default class View {
             // Warn the developer if the hardware is not capable.
             console.warn(`This adapter only supports ${adapter.limits.maxStorageTexturesPerShaderStage} storage textures per shader stage. The erosion simulation, which requires 8, may not work correctly.`);
         }
-        this.device = await adapter.requestDevice({ requiredLimits });
+        this.device = await adapter.requestDevice({ requiredFeatures, requiredLimits });
 
         this.device.lost.then(info => console.error(`WebGPU device was lost: ${info.message}`));
         this.device.addEventListener('uncapturederror', (event) => console.error('A WebGPU uncaptured error occurred:', event.error));
@@ -57,9 +72,11 @@ export default class View {
 
         // Fetch and create all pipelines
         console.log("Loading shader files...");
-        const [renderCode] = await Promise.all([
+        const [renderCode, flowRenderCode] = await Promise.all([
             fetch('/shaders/render.wgsl').then(res => res.text()),
+            fetch('/shaders/flow_render.wgsl').then(res => res.text()),
         ]);
+        const flowRenderModule = this.device.createShaderModule({ code: flowRenderCode });
 
         const renderModule = this.device.createShaderModule({ code: renderCode });
 
@@ -72,8 +89,41 @@ export default class View {
         });
         const computePipelineLayout = this.device.createPipelineLayout({ bindGroupLayouts: [computeBindGroupLayout] });
         
+        // Explicitly define the bind group layout for the standard render shader's uniforms (@group(0)).
+        // This layout is shared between the standard render pipeline and the flow heatmap pipeline,
+        // which is a requirement. A layout created implicitly with 'auto' cannot be reused.
+        const renderBindGroupLayout = this.device.createBindGroupLayout({
+            entries: [
+                { // modelViewMatrix
+                    binding: 0,
+                    visibility: GPUShaderStage.VERTEX,
+                    buffer: { type: 'uniform' }
+                },
+                { // projectionMatrix
+                    binding: 1,
+                    visibility: GPUShaderStage.VERTEX,
+                    buffer: { type: 'uniform' }
+                },
+                { // normalMatrix
+                    binding: 2,
+                    visibility: GPUShaderStage.VERTEX,
+                    buffer: { type: 'uniform' }
+                },
+                { // viewMatrix
+                    binding: 3,
+                    visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+                    buffer: { type: 'uniform' }
+                },
+                { // globals (seaLevel)
+                    binding: 4,
+                    visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+                    buffer: { type: 'uniform' }
+                }
+            ]
+        });
+
         this.renderPipeline = await this.device.createRenderPipeline({
-            layout: 'auto',
+            layout: this.device.createPipelineLayout({ bindGroupLayouts: [renderBindGroupLayout] }),
             vertex: {
                 module: renderModule,
                 entryPoint: 'vs_main',
@@ -91,6 +141,73 @@ export default class View {
         });
         await checkShaderCompilation(this.renderPipeline, 'Render Pipeline');
 
+        // Explicitly define the bind group layout for the flow heatmap shader's second group (@group(1)).
+        // This is necessary because we are using a mix of filterable (float) and non-filterable
+        // textures, and the 'auto' layout can infer the wrong sample types.
+        const flowRenderBindGroupLayout = this.device.createBindGroupLayout({
+            entries: [
+                { // water_texture (r32float)
+                    binding: 0,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    texture: { sampleType: 'unfilterable-float' }
+                },
+                { // velocity_texture (rgba32float)
+                    binding: 1,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    texture: { sampleType: 'float' } // 'float' is filterable
+                },
+                { // terrain_texture (r32float)
+                    binding: 2,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    texture: { sampleType: 'unfilterable-float' }
+                },
+                { // linear_sampler
+                    binding: 3,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    sampler: { type: 'filtering' }
+                },
+                { // nearest_sampler
+                    binding: 4,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    sampler: { type: 'non-filtering' }
+                },
+                { // sediment_texture (r32float)
+                    binding: 5,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    texture: { sampleType: 'unfilterable-float' }
+                }
+            ]
+        });
+
+        this.flowRenderPipeline = await this.device.createRenderPipeline({
+            layout: this.device.createPipelineLayout({ bindGroupLayouts: [renderBindGroupLayout, flowRenderBindGroupLayout] }),
+            vertex: {
+                module: flowRenderModule,
+                entryPoint: 'vs_main',
+                buffers: [ // Only the position buffer is needed
+                    { arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }
+                ],
+            },
+            fragment: {
+                module: flowRenderModule,
+                entryPoint: 'fs_main',
+                targets: [{ format: this.format }],
+            },
+            primitive: { topology: 'triangle-list' },
+            depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
+        });
+        await checkShaderCompilation(this.flowRenderPipeline, 'Flow Render Pipeline');
+
+        this.linearSampler = this.device.createSampler({
+            magFilter: 'linear',
+            minFilter: 'linear',
+        });
+
+        this.nearestSampler = this.device.createSampler({
+            magFilter: 'nearest',
+            minFilter: 'nearest',
+        });
+
         return {
             device: this.device,
             computePipelineLayout: computePipelineLayout,
@@ -107,7 +224,7 @@ export default class View {
             this.canvas.height = newHeight;
 
             this.recreateRenderResources();
-            this.drawScene();
+            this.drawScene('standard');
         }
     }
 
@@ -127,7 +244,7 @@ export default class View {
         // Create Buffers
         this.projectionBuffer = this.device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         this.viewBuffer = this.device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-        this.globalParamsBuffer = this.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        this.globalParamsBuffer = this.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }); // 16 bytes for alignment (f32, u32, padding)
 
         // Create Textures
         this.depthTexture = this.device.createTexture({
@@ -252,16 +369,52 @@ export default class View {
         this.device.queue.writeBuffer(tile.indexBuffer, 0, indexData);
     }
 
-    updateGlobalParams(seaLevel) {
+    updateGlobalParams(seaLevel, viewMode = 'standard') {
         if (this.globalParamsBuffer) {
-            this.device.queue.writeBuffer(this.globalParamsBuffer, 0, new Float32Array([seaLevel]));
+            const viewModeMap = {
+                'standard': 0,
+                'water-depth': 1,
+                'water-velocity': 2,
+                'sediment': 3
+            };
+            const viewModeIndex = viewModeMap[viewMode] ?? 0;
+            // The buffer expects a layout of { f32, u32, vec2<f32> } for 16-byte alignment.
+            // We write the f32 for seaLevel and u32 for viewMode.
+            const uniformData = new ArrayBuffer(16);
+            new Float32Array(uniformData, 0, 1)[0] = seaLevel;
+            new Uint32Array(uniformData, 4, 1)[0] = viewModeIndex;
+            this.device.queue.writeBuffer(this.globalParamsBuffer, 0, uniformData);
         }
     }
 
-    drawScene() {
-        if (!this.device || !this.context || !this.renderPipeline) {
+    updateFlowMapTextures(waterTexture, velocityTexture, terrainTexture, sedimentTexture) {
+        if (!this.flowRenderPipeline || !waterTexture || !velocityTexture || !terrainTexture || !sedimentTexture) return;
+
+        // This bind group is created on-demand and points to the latest textures from the simulation.
+        // It uses a different layout (@group(1)) than the main render pass to avoid conflicts.
+        this.flowRenderBindGroup = this.device.createBindGroup({
+            layout: this.flowRenderPipeline.getBindGroupLayout(1),
+            entries: [
+                { binding: 0, resource: waterTexture.createView() },
+                { binding: 1, resource: velocityTexture.createView() },
+                { binding: 2, resource: terrainTexture.createView() },
+                { binding: 3, resource: this.linearSampler },
+                { binding: 4, resource: this.nearestSampler },
+                { binding: 5, resource: sedimentTexture.createView() },
+            ],
+        });
+    }
+
+    drawScene(viewMode = 'standard') {
+        if (!this.device || !this.context) {
             return;
         }
+
+        const activePipeline = viewMode !== 'standard' ? this.flowRenderPipeline : this.renderPipeline;
+        if (!activePipeline) return;
+
+        // If we're in heatmap mode but don't have the data yet, don't draw.
+        if (viewMode !== 'standard' && !this.flowRenderBindGroup) return;
 
         const projectionMatrix = mat4.create();
         mat4.perspective(projectionMatrix, (45 * Math.PI) / 180, this.canvas.width / this.canvas.height, 0.1, 100);
@@ -300,13 +453,19 @@ export default class View {
             this.device.queue.writeBuffer(tile.modelViewBuffer, 0, modelViewMatrix);
             this.device.queue.writeBuffer(tile.normalMatBuffer, 0, normalMatrix);
 
-            renderPass.setPipeline(this.renderPipeline);
-            renderPass.setBindGroup(0, tile.renderBindGroup);
-            renderPass.setVertexBuffer(0, tile.positionBuffer);
-            renderPass.setVertexBuffer(1, tile.normalBuffer);
-            renderPass.setVertexBuffer(2, tile.normalizedHeightBuffer);
-            renderPass.setVertexBuffer(3, tile.isWaterBuffer);
-            renderPass.setVertexBuffer(4, tile.waterDepthBuffer);
+            renderPass.setPipeline(activePipeline);
+            if (viewMode !== 'standard') {
+                renderPass.setBindGroup(0, tile.renderBindGroup); // Per-tile matrices
+                renderPass.setBindGroup(1, this.flowRenderBindGroup); // Global flow textures
+                renderPass.setVertexBuffer(0, tile.positionBuffer); // Only need position
+            } else {
+                renderPass.setBindGroup(0, tile.renderBindGroup);
+                renderPass.setVertexBuffer(0, tile.positionBuffer);
+                renderPass.setVertexBuffer(1, tile.normalBuffer);
+                renderPass.setVertexBuffer(2, tile.normalizedHeightBuffer);
+                renderPass.setVertexBuffer(3, tile.isWaterBuffer);
+                renderPass.setVertexBuffer(4, tile.waterDepthBuffer);
+            }
             renderPass.setIndexBuffer(tile.indexBuffer, this.indexFormat);
             renderPass.drawIndexed(tile.indexCount);
         }

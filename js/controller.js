@@ -43,19 +43,25 @@ class Controller {
                 this.simulationController.wantsUpdate = true;
             },
             onErode: () => this.simulationController.erodeTerrain(this._getErosionParamsFromUI(), parseInt(document.getElementById('erosion-iterations')?.value || '10', 10)),
-            onToggleRainDry: () => this.simulationController.toggleRainDry(this._getErosionParamsFromUI()),
+            onRainModeChange: (mode) => this.simulationController.setRainMode(mode),
             onResetView: () => {
                 this.view.camera.reset();
-                this.view.drawScene();
+                this.view.drawScene(this.simulationController.viewMode);
             },
-            onRedrawScene: () => this.view.drawScene(),
+            onRedrawScene: () => this.view.drawScene(this.simulationController.viewMode),
             onSnapshot: () => this.takeSnapshot(),
             onToggleCapture: () => this.simulationController.toggleCapture(),
             onSaveCapture: () => this.simulationController.saveCaptureData(),
             onClearCapture: () => this.simulationController.clearCaptureData(),
             onStrategyChange: (name) => this.simulationController.changeShaderStrategy(name),
             onErosionModelChange: (name) => this.simulationController.changeErosionModel(name),
+            onViewModeChange: (name) => {
+                const seaLevel = parseFloat(document.getElementById('erosion-sea-level')?.value || '0.15');
+                this.simulationController.changeViewMode(name, seaLevel);
+            },
             onParamsChanged: () => this.simulationController.wantsUpdate = true,
+            onPlotMetricChange: (metrics) => this.simulationController.changePlotMetric(metrics),
+            onShowPlotWindow: () => this.simulationController.showPlotWindow(),
         };
         this.uiController = new UIController(uiCallbacks, config);
 
@@ -119,12 +125,15 @@ class Controller {
         const evapRate = 0.8 - wetness * 0.75;   // Map wetness [0.01, 1.0] to evap [~0.8, 0.05]
 
         return {
+            wetness: wetness, // The raw UI slider value
             rainAmount: rainAmount,
             evapRate: evapRate,
             solubility: parseFloat(document.getElementById('erosion-solubility')?.value || '0.5'),
             depositionRate: parseFloat(document.getElementById('erosion-deposition')?.value || '0.3'),
             capacityFactor: parseFloat(document.getElementById('erosion-capacity')?.value || '20'),
             seaLevel: parseFloat(document.getElementById('erosion-sea-level')?.value || '0.15'),
+            // The erosion simulation needs to know the terrain's vertical scale to work correctly.
+            heightMultiplier: parseFloat(document.getElementById('heightMultiplier').value),
         };
     }
 
@@ -153,7 +162,7 @@ class Controller {
         const params = this._getParamsFromUI();
 
         // Update global shader uniforms, like sea level, before any drawing occurs.
-        this.view.updateGlobalParams(params.seaLevel);
+        this.view.updateGlobalParams(params.seaLevel, this.simulationController.viewMode);
 
         const wantsUpdate = this.simulationController.wantsUpdate;
         this.simulationController.wantsUpdate = false; // Consume the request

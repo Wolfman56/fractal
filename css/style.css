@@ -5,6 +5,11 @@
     --border-color: #444;
     --accent-color: #007bff;
     --accent-hover-color: #0056b3;
+    --phase-1-color: #569cd6; /* Blue */
+    --phase-2-color: #4ec9b0; /* Teal/Green */
+    --phase-3-color: #ce9178; /* Orange/Brown */
+    --phase-4-color: #c586c0; /* Purple */
+    --phase-5-color: #9cdcfe; /* Light Blue */
     --font-family: 'Inter', sans-serif;
 }
 
@@ -175,25 +180,33 @@ button:hover {
     font-weight: 500;
 }
 
-/* --- Rain/Dry Toggle Button --- */
-#rain-dry-toggle {
-    /* Default "Dry" state */
-    background-color: #a1887f; /* Light brown for "Dry" state */
-    color: white;
+/* --- Erode Button States --- */
+#erode-terrain {
     transition: background-color 0.2s ease-in-out;
 }
 
-#rain-dry-toggle:hover {
+#erode-terrain.state-dry {
+    background-color: #a1887f; /* Light brown for "Dry" state */
+}
+#erode-terrain.state-dry:hover {
     background-color: #bcaaa4;
 }
 
-#rain-dry-toggle[data-raining="true"] {
-    /* "Rain" state */
+#erode-terrain.state-rain {
     background-color: #3a7ca5; /* A water/blue color */
 }
-
-#rain-dry-toggle[data-raining="true"]:hover {
+#erode-terrain.state-rain:hover {
     background-color: #4a90c1;
+}
+
+.button-secondary {
+    background-color: #6c757d; /* A neutral gray */
+    width: 100%;
+    padding: 8px 16px;
+}
+
+.button-secondary:hover {
+    background-color: #5a6268;
 }
 
 /* --- Debug Section Specifics --- */
@@ -229,6 +242,64 @@ button:hover {
     width: 100%;
     border-top: 1px solid var(--border-color);
     margin-top: 10px;
+}
+
+.metric-phase-group {
+    margin-top: 10px;
+}
+
+.metric-phase-group h4 {
+    margin: 0 0 5px 0;
+    font-size: 0.9em;
+    font-weight: 500;
+}
+
+.metric-toggles-wrapper {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.metric-toggle input[type="checkbox"] {
+    display: none; /* Hide the actual checkbox */
+}
+
+.metric-toggle label {
+    display: inline-block;
+    padding: 3px 8px;
+    background-color: #4a4a4a;
+    border: 1px solid #666;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease-in-out;
+    font-size: 0.85em;
+    user-select: none;
+}
+
+.metric-toggle label:hover {
+    background-color: #5a5a5a;
+}
+
+.metric-toggle input[type="checkbox"]:checked + label {
+    background-color: var(--accent-color);
+    border-color: var(--accent-hover-color);
+    color: white;
+}
+
+.phase-1-color { color: var(--phase-1-color); }
+.phase-2-color { color: var(--phase-2-color); }
+.phase-3-color { color: var(--phase-3-color); }
+.phase-4-color { color: var(--phase-4-color); }
+.phase-5-color { color: var(--phase-5-color); }
+
+.metric-phase-group h5 {
+    margin: 8px 0 4px 0;
+    font-size: 0.8em;
+    font-weight: normal;
+    text-transform: capitalize;
+    color: #ccc;
+    border-bottom: 1px solid #444;
+    padding-bottom: 3px;
 }
 
 .stat-line {
