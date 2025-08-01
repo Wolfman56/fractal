@@ -1,5 +1,6 @@
 import View from './view.js';
 import UIController from './ui_controller.js';
+import mat4 from './mat4.js';
 import InputHandler from './input_handler.js';
 import SimulationController from './simulation_controller.js';
 
@@ -14,6 +15,8 @@ class Controller {
         this.uiController = null;
         this.inputHandler = null;
         this.simulationController = null;
+        this.config = null;
+        this.hasLoggedMatrices = false;
     }
 
     async init() {
@@ -24,6 +27,7 @@ class Controller {
             return;
         }
         const config = await response.json();
+        this.config = config;
 
         const gpuContext = await this.view.initWebGPU();
         if (!gpuContext) {
@@ -39,24 +43,34 @@ class Controller {
                 // A full regeneration should reset the view to its default state and clear
                 // any existing normalization data to accurately reflect the new terrain.
                 if (this.inputHandler) {
-                    this.inputHandler.worldOffset = { ...(config.generation.worldOffset || { x: 0, y: 0 }) };
+                    this.inputHandler.worldOffset = { ...(this.config.generation.worldOffset || { x: 0, y: 0 }) };
                 }
+                // Also reset the camera view, recalculating scale based on current UI params
+                const params = this._getParamsFromUI();
+                const visualHeight = params.metersPerSide * params.verticalExaggeration;
+                this.view.camera.setWorldScale(params.metersPerSide, visualHeight);
                 this.view.camera.reset();
+
+                this.hasLoggedMatrices = false; // Reset log flag on regenerate
                 this.simulationController.currentModel.shaderStrategy.resetNormalization();
                 this.simulationController.wantsUpdate = true;
             },
-            onErode: () => this.simulationController.erodeTerrain(this._getErosionParamsFromUI(), parseInt(document.getElementById('erosion-iterations')?.value || '10', 10)),
+            onErode: () => this.simulationController.erodeTerrain(),
             onRainModeChange: (mode) => this.simulationController.setRainMode(mode),
             onResetView: () => {
                 // Resetting the view should return both the camera and the terrain's pan
                 // position to their default states, then trigger a regeneration.
                 if (this.inputHandler) {
-                    this.inputHandler.worldOffset = { ...(config.generation.worldOffset || { x: 0, y: 0 }) };
+                    this.inputHandler.worldOffset = { ...(this.config.generation.worldOffset || { x: 0, y: 0 }) };
                 }
+                // Update the camera's scale based on the current UI settings before resetting.
+                // This ensures the camera targets the center of the *visually scaled* object.
+                const params = this._getParamsFromUI();
+                const visualHeight = params.metersPerSide * params.verticalExaggeration;
+                this.view.camera.setWorldScale(params.metersPerSide, visualHeight);
                 this.view.camera.reset();
                 this.simulationController.wantsUpdate = true;
             },
-            onRedrawScene: () => this.view.drawScene(this.simulationController.viewMode),
             onSnapshot: () => this.takeSnapshot(),
             onToggleCapture: () => this.simulationController.toggleCapture(),
             onSaveCapture: () => this.simulationController.saveCaptureData(),
@@ -75,6 +89,14 @@ class Controller {
 
         this.simulationController = new SimulationController(this.device, this.view, this.uiController, config);
         await this.simulationController.init(gpuContext.computePipelineLayout);
+
+        // Set the camera's scale based on the world configuration before the first render.
+        // The visual height is determined by the aspect ratio slider, which makes the
+        // world appear as a cube when the slider is at 1.0.
+        const visualAspectRatio = this.config.visuals.verticalExaggeration;
+        const visualHeight = this.config.world.metersPerSide * visualAspectRatio;
+        this.view.camera.setWorldScale(this.config.world.metersPerSide, visualHeight);
+        this.view.camera.reset();
 
         this.inputHandler = new InputHandler(this.canvas, this.view,
             () => ({ currentModel: this.simulationController.currentModel }),
@@ -122,28 +144,9 @@ class Controller {
             heightMultiplier: parseFloat(document.getElementById('heightMultiplier').value),
             hurst: parseFloat(document.getElementById('hurst').value),
             worldOffset: worldOffset,
+            metersPerSide: this.config.world.metersPerSide,
             seaLevel: parseFloat(document.getElementById('erosion-sea-level')?.value || '0.15'),
-        };
-    }
-
-    _getErosionParamsFromUI() {
-        const wetness = parseFloat(document.getElementById('erosion-wetness')?.value || '0.2');
-
-        // Map the single "Wetness" value to the two underlying simulation parameters.
-        // This gives the user an intuitive single control while ensuring the simulation remains stable.
-        const rainAmount = 0.001 + wetness * 0.05; // Map wetness [0.01, 1.0] to rain [~0.001, 0.05]
-        const evapRate = 0.8 - wetness * 0.75;   // Map wetness [0.01, 1.0] to evap [~0.8, 0.05]
-
-        return {
-            wetness: wetness, // The raw UI slider value
-            rainAmount: rainAmount,
-            evapRate: evapRate,
-            solubility: parseFloat(document.getElementById('erosion-solubility')?.value || '0.5'),
-            depositionRate: parseFloat(document.getElementById('erosion-deposition')?.value || '0.3'),
-            capacityFactor: parseFloat(document.getElementById('erosion-capacity')?.value || '20'),
-            seaLevel: parseFloat(document.getElementById('erosion-sea-level')?.value || '0.15'),
-            // The erosion simulation needs to know the terrain's vertical scale to work correctly.
-            heightMultiplier: parseFloat(document.getElementById('heightMultiplier').value),
+            verticalExaggeration: parseFloat(document.getElementById('verticalExaggeration')?.value || '1.0'),
         };
     }
 
@@ -171,13 +174,62 @@ class Controller {
         // Get latest UI parameters for this frame.
         const params = this._getParamsFromUI();
 
-        // Update global shader uniforms, like sea level, before any drawing occurs.
-        this.view.updateGlobalParams(params.seaLevel, this.simulationController.viewMode);
-
         const wantsUpdate = this.simulationController.wantsUpdate;
-        this.simulationController.wantsUpdate = false; // Consume the request
 
+        // This runs the model update if needed
         this.simulationController.tick(wantsUpdate, params);
+
+        // If a terrain update is in progress, it will handle its own drawing
+        // once complete. We should not draw here to avoid using inconsistent state.
+        if (this.simulationController.isUpdating) {
+            return;
+        }
+
+        const lastRenderParams = this.simulationController.currentModel.lastRenderParams;
+
+        // The actual dynamic range of the terrain in meters.
+        const actualHeightRange = lastRenderParams?.heightMultiplier ?? params.heightMultiplier;
+
+        let finalVerticalExaggeration = params.verticalExaggeration;
+
+        // To achieve a "unit cube" view where 1.0 on the slider means the visual height
+        // matches the world width, we apply an aspect ratio correction.
+        if (actualHeightRange > 1e-6) {
+            const aspectRatioCorrection = params.metersPerSide / actualHeightRange;
+            finalVerticalExaggeration = aspectRatioCorrection * params.verticalExaggeration;
+        }
+
+        // --- DEBUG LOGGING ---
+        // On the first frame after a terrain update completes, log all transform matrices and extents.
+        if (this.simulationController.dataIsReady && !this.hasLoggedMatrices) {
+            const pMatrix = mat4.create();
+            const nearPlane = this.view.camera.minZoom * 0.1;
+            const farPlane = this.view.camera.maxZoom * 2.0;
+            mat4.perspective(pMatrix, (45 * Math.PI) / 180, this.view.canvas.width / this.view.canvas.height, nearPlane, farPlane);
+
+            const vMatrix = this.view.camera.getViewMatrix();
+            const firstTile = this.view.tiles.values().next().value;
+            const mMatrix = firstTile ? firstTile.modelMatrix : mat4.create();
+
+            const maxPhysicalY = (lastRenderParams?.seaLevelOffset ?? 0) + (lastRenderParams?.heightMultiplier ?? params.heightMultiplier);
+            const maxVisualY = maxPhysicalY * finalVerticalExaggeration;
+
+            console.groupCollapsed("--- First Frame Render Debug ---");
+            console.log("Projection Matrix (P):", pMatrix);
+            console.log("View Matrix (V):", vMatrix);
+            console.log("Model Matrix (M):", mMatrix);
+            console.log("Max Visual Geometry Extent (World Space):", { x: params.metersPerSide / 2.0, y: maxVisualY, z: params.metersPerSide / 2.0 });
+            console.log("Calculation Details:", { physicalHeightRange: actualHeightRange, uiExaggeration: params.verticalExaggeration, finalExaggerationToShader: finalVerticalExaggeration });
+            console.groupEnd();
+
+            this.hasLoggedMatrices = true;
+            this.simulationController.dataIsReady = false; // Consume the flag
+        }
+        // --- END DEBUG LOGGING ---
+
+        // This updates uniforms and draws the scene every frame
+        this.view.updateGlobalParams(params.seaLevel, this.simulationController.viewMode, lastRenderParams, finalVerticalExaggeration);
+        this.view.drawScene(this.simulationController.viewMode);
     }
 }
 

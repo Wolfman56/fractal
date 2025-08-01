@@ -1,7 +1,8 @@
-import { TiledLODModel, UntiledHeightmapModel } from './models.js';
+import { UntiledHeightmapModel } from './models.js';
 import { HydraulicErosionModel, HydraulicErosionModelDebug, SimpleErosionModel } from './erosion_models.js';
-import { ScrollingShaderStrategy, FractalZoomShaderStrategy, ScrollAndZoomStrategy, PyramidShaderStrategy } from './shader_strategies.js';
-import SimulationCapture from './simulation_capture.js';
+import { ScrollingShaderStrategy, FractalZoomShaderStrategy, ScrollAndZoomStrategy, PyramidShaderStrategy, BowlShaderStrategy, PlaneShaderStrategy } from './shader_strategies.js';
+import SimulationCapture from './simulation_capture.js'; // Now a formal module
+import { getPaddedByteRange } from './utils.js';
 
 /**
  * Manages the core simulation state and logic, including terrain generation and erosion.
@@ -11,13 +12,14 @@ export default class SimulationController {
         this.device = device;
         this.view = view;
         this.uiController = uiController;
-        this.simulationCapture = new SimulationCapture(this.uiController);
+        this.simulationCapture = new SimulationCapture(this.uiController, config.capture);
 
         this.config = config;
         // Simulation State
         this.isUpdating = false;
         this.wantsUpdate = false;
         this.isEroding = false;
+        this.dataIsReady = false;
 
         // Models & Strategies
         this.shaderStrategies = {
@@ -25,6 +27,8 @@ export default class SimulationController {
             'FractalZoom': new FractalZoomShaderStrategy(),
             'Scroll & Zoom': new ScrollAndZoomStrategy(),
             'Pyramid': new PyramidShaderStrategy(),
+            'Bowl': new BowlShaderStrategy(),
+            'Plane': new PlaneShaderStrategy(),
         };
         this.models = {};
         this.currentModel = null;
@@ -73,7 +77,6 @@ export default class SimulationController {
 
     tick(wantsUpdate, params) {
         if (wantsUpdate && !this.isUpdating) {
-            this.wantsUpdate = false; // Consume the request
             this.updateTerrain(params);
         }
     }
@@ -84,6 +87,8 @@ export default class SimulationController {
             return;
         }
         this.isUpdating = true;
+        this.wantsUpdate = false; // Consume the request now that we are starting.
+        this.dataIsReady = false; // Reset the flag at the start of an update.
 
         try {
             const confirmOverwrite = document.getElementById('confirm-overwrite')?.checked ?? true;
@@ -130,7 +135,7 @@ export default class SimulationController {
             this.lastErosionAmount = -1;
             this.uiController.updateStats(0, 0, 0, this.simulationCapture.frameCount);
 
-            this.view.drawScene(this.viewMode);
+            this.dataIsReady = true; // Signal that the data is ready for the main loop to consume.
         } catch (e) {
             console.error("Error during terrain update:", e);
         } finally {
@@ -138,13 +143,49 @@ export default class SimulationController {
         }
     }
 
-    async erodeTerrain(erosionParams, iterations) {
+    _getErosionParamsFromUI() {
+        const wetness = parseFloat(document.getElementById('erosion-wetness')?.value || '0.2');
+        const gridSize = Math.pow(2, parseInt(document.getElementById('gridSize').value, 10));
+        const { metersPerSide, dt } = this.config.world;
+
+        // The UI 'wetness' slider [0.01, 1.0] now represents a rain rate in mm/s.
+        const rainRate_mm_s = wetness;
+        const rainRate_m_s = rainRate_mm_s / 1000.0;
+        const rainAmount_per_step = rainRate_m_s * dt;
+
+        // The evaporation rate is also derived from wetness. We treat it as a fraction per second.
+        // The shader will multiply it by dt. A wetness of 1.0 means 0 evaporation.
+        const evapRate_per_s = 0.05 * (1.0 - wetness);
+
+        return {
+            // --- UI Parameters ---
+            wetness: wetness,
+            solubility: parseFloat(document.getElementById('erosion-solubility')?.value || '0.5'),
+            depositionRate: parseFloat(document.getElementById('erosion-deposition')?.value || '0.3'),
+            capacityFactor: parseFloat(document.getElementById('erosion-capacity')?.value || '0.1'),
+            density: parseFloat(document.getElementById('erosion-density')?.value || '9.8'),
+            seaLevel: parseFloat(document.getElementById('erosion-sea-level')?.value || '0.15'),
+            gridSize: gridSize,
+
+            // --- Derived & World Parameters ---
+            rainAmount: rainAmount_per_step,
+            evapRate: evapRate_per_s,
+            dt: dt,
+            cellSize: metersPerSide / gridSize,
+            heightMultiplier: 1.0, // For physics, heightmap is already in meters.
+            minSlope: 0.01,
+            velocityDamping: 0.99,
+        };
+    }
+
+
+
+    async erodeTerrain() {
         if (this.isEroding) return;
-        if (!(this.currentModel instanceof UntiledHeightmapModel)) {
-            console.warn("Erosion is only supported for non-tiled render modes.");
-            return;
-        }
         if (!this.currentModel.lastGeneratedHeightmap) return;
+
+        const iterations = parseInt(document.getElementById('erosion-iterations')?.value || '10', 10);
+        const erosionParams = this._getErosionParamsFromUI();
 
         // Record the command if capturing is active. This is done before the
         // simulation runs to log the intended action.
@@ -237,7 +278,18 @@ export default class SimulationController {
     }
 
     saveCaptureData() {
+        // Find the key/name of the current erosion model to append to the filename.
+        const modelKey = Object.keys(this.erosionModels).find(key => this.erosionModels[key] === this.currentErosionModel);
+
+        // Temporarily modify the base filename in the config before saving.
+        // This allows us to change the output filename without altering the SimulationCapture class signature.
+        const originalFilename = this.simulationCapture.config.baseFilename;
+        if (modelKey) {
+            this.simulationCapture.config.baseFilename = `${originalFilename}_${modelKey}`;
+        }
+
         this.simulationCapture.save();
+        this.simulationCapture.config.baseFilename = originalFilename; // Restore for subsequent saves
     }
 
     clearCaptureData() {

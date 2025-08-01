@@ -1,44 +1,57 @@
 /**
- * Manages the lifecycle of capturing and saving simulation debug data.
+ * Manages the capture, storage, and saving of simulation data for debugging and analysis.
  */
 export default class SimulationCapture {
-    constructor(uiController) {
+    /**
+     * @param {UIController} uiController - A reference to the UI controller for updating stats.
+     * @param {object} config - The capture-specific configuration from config.json.
+     */
+    constructor(uiController, config = {}) {
         this.uiController = uiController;
+        this.config = config;
         this.isCapturing = false;
-        this.debugCaptureData = [];
         this.commandHistory = [];
+        this.debugCaptureData = [];
+        this.frameCount = 0;
     }
 
     /**
-     * Toggles the data capture state on or off.
+     * Toggles the data capture state.
      */
     toggle() {
         this.isCapturing = !this.isCapturing;
-        this.uiController.updateCaptureButtonState(this.isCapturing);
         console.log(`Data capture ${this.isCapturing ? 'enabled' : 'disabled'}.`);
     }
 
     /**
-     * Saves the captured data to a JSON file.
+     * Saves the captured command history and frame-by-frame data to a JSON file.
+     * The filename is determined by the configuration settings.
      */
     save() {
-        if (this.debugCaptureData.length === 0) {
-            alert("No debug data captured.");
+        if (this.commandHistory.length === 0 && this.debugCaptureData.length === 0) {
+            alert("No data to save.");
             return;
         }
-        const saveData = {
+
+        const baseFilename = this.config.baseFilename || 'sim_capture';
+        const overwrite = this.config.overwriteSave || false;
+        const filename = `${baseFilename}.json`;
+
+        const data = {
             history: this.commandHistory,
-            data: this.debugCaptureData
+            data: this.debugCaptureData,
         };
-        const dataStr = JSON.stringify(saveData, null, 2);
-        const blob = new Blob([dataStr], { type: "application/json" });
+        const jsonString = JSON.stringify(data, null, 2);
+        const blob = new Blob([jsonString], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = `erosion_capture_${Date.now()}.json`;
+        link.download = filename;
+        document.body.appendChild(link);
         link.click();
+        document.body.removeChild(link);
         URL.revokeObjectURL(url);
-        console.log(`Saved ${this.debugCaptureData.length} frames of capture data.`);
+        console.log(`Capture data saved to ${filename}`);
     }
 
     /**
@@ -46,40 +59,20 @@ export default class SimulationCapture {
      * @returns {boolean} - True if data was cleared, false otherwise.
      */
     clear() {
-        if (this.debugCaptureData.length > 0 && window.confirm(`Are you sure you want to clear ${this.debugCaptureData.length} captured frames?`)) {
+        if (this.commandHistory.length === 0 && this.debugCaptureData.length === 0) {
+            return false; // Nothing to clear
+        }
+        if (window.confirm("Are you sure you want to clear all captured data? This cannot be undone.")) {
+            this.isCapturing = false;
             this.commandHistory = [];
             this.debugCaptureData = [];
-            this.isCapturing = false; // Clearing data also stops the capture.
-            console.log("Cleared capture data. Capture stopped.");
+            this.frameCount = 0;
+            console.log("Capture data cleared.");
             return true;
         }
         return false;
     }
 
-    /**
-     * Adds a new frame of captured data to the internal array.
-     * @param {number} frameNumber - The current iteration/frame number.
-     * @param {object} data - The captured data object for this frame.
-     */
-    addFrame(frameNumber, data) {
-        if (!this.isCapturing || !data) return;
-        this.debugCaptureData.push({ frame: frameNumber, data });
-    }
-
-    /**
-     * Records a user-initiated command if capturing is active.
-     * @param {object} command - The command details to record.
-     */
-    recordCommand(command) {
-        if (!this.isCapturing) return;
-        this.commandHistory.push(command);
-    }
-
-    /**
-     * Gets the current number of captured frames.
-     * @returns {number}
-     */
-    get frameCount() {
-        return this.debugCaptureData.length;
-    }
+    recordCommand(command) { if (!this.isCapturing) return; this.commandHistory.push(command); }
+    addFrame(frame, data) { if (!this.isCapturing) return; this.debugCaptureData.push({ frame, data }); this.frameCount = this.debugCaptureData.length; }
 }

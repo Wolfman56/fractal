@@ -59,6 +59,24 @@ Because the application loads shader files and uses ES modules, you must run it 
 3.  **Open in your browser:**
     Navigate to `http://localhost:8000` (or the port specified by your server).
 
+### Running the Python Validation Scripts
+
+The project includes a suite of Python scripts for validation and parameter optimization located in the `/test` directory. To run them, you'll need to install their dependencies.
+
+1.  **Navigate to the test directory:**
+    ```bash
+    cd test
+    ```
+2.  **Install the required packages:**
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+You can then run the scripts, for example:
+- `python erosion_cpu.py <gpu_capture_file.json> <output_directory>` to generate a CPU-based simulation result.
+- `python simulation_compare.py <gpu_capture_file.json> <cpu_output_file.json>` to compare the two results.
+- `python param_optimization.py` to automatically find optimal parameters for a given goal.
+
 ---
 
 ## 🎮 Controls

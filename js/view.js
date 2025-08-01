@@ -94,7 +94,7 @@ export default class View {
         // which is a requirement. A layout created implicitly with 'auto' cannot be reused.
         const renderBindGroupLayout = this.device.createBindGroupLayout({
             entries: [
-                { // modelViewMatrix
+                { // modelMatrix
                     binding: 0,
                     visibility: GPUShaderStage.VERTEX,
                     buffer: { type: 'uniform' }
@@ -130,9 +130,7 @@ export default class View {
                 buffers: [
                     { arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] },
                     { arrayStride: 12, attributes: [{ shaderLocation: 1, offset: 0, format: 'float32x3' }] },
-                    { arrayStride: 4, attributes: [{ shaderLocation: 2, offset: 0, format: 'float32' }] },
-                    { arrayStride: 4, attributes: [{ shaderLocation: 3, offset: 0, format: 'float32' }] },
-                    { arrayStride: 4, attributes: [{ shaderLocation: 4, offset: 0, format: 'float32' }] },
+                    { arrayStride: 4, attributes: [{ shaderLocation: 2, offset: 0, format: 'float32' }] }, // water_depth
                 ],
             },
             fragment: { module: renderModule, entryPoint: 'fs_main', targets: [{ format: this.format }] },
@@ -244,7 +242,7 @@ export default class View {
         // Create Buffers
         this.projectionBuffer = this.device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         this.viewBuffer = this.device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-        this.globalParamsBuffer = this.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }); // 16 bytes for alignment (f32, u32, padding)
+        this.globalParamsBuffer = this.device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }); // Increased size for new uniforms
 
         // Create Textures
         this.depthTexture = this.device.createTexture({
@@ -282,36 +280,21 @@ export default class View {
         this.tiles = newTiles;
     }
 
-    updateTileMesh(key, heights, params, waterHeights = null, neighborLODs = {}, modelMatrix = null) {
+    updateTileMesh(key, worldHeights, params, waterHeights = null, neighborLODs = {}, modelMatrix = null) {
         const tile = this.tiles.get(key);
         if (!tile) return;
 
-        const { positions, normals, indices, yValues, normalizedHeights, isWater, waterDepths } = createTileGeometry(
-            heights,
-            params,
-            waterHeights,
-            neighborLODs,
-            tile.lod
-        );
+        const { positions, normals, indices, waterDepths } = createTileGeometry(worldHeights, params, waterHeights);
 
         if (modelMatrix) {
             tile.modelMatrix = modelMatrix;
         }
 
-        // For a tiled system, we only want to set the camera target based on the central tile.
-        if (tile.x === 0 && tile.z === 0) {
-            let maxY = -Infinity;
-            for (let i = 1; i < positions.length; i += 3) {
-                if (positions[i] > maxY) maxY = positions[i];
-            }
-            this.camera.target = [0, maxY / 2, 0];
-        }
-
-        this.updateMeshBuffers(tile, positions, normals, indices, normalizedHeights, isWater, waterDepths);
+        this.updateMeshBuffers(tile, positions, normals, indices, waterDepths);
     }
 
-    updateMeshBuffers(tile, positions, normals, indices, normalizedHeights, isWater, waterDepths) {
-        [tile.positionBuffer, tile.normalBuffer, tile.indexBuffer, tile.normalizedHeightBuffer, tile.isWaterBuffer, tile.waterDepthBuffer]
+    updateMeshBuffers(tile, positions, normals, indices, waterDepths) {
+        [tile.positionBuffer, tile.normalBuffer, tile.indexBuffer, tile.waterDepthBuffer]
             .forEach(b => b?.destroy()); // Destroy old buffers for this tile
 
         tile.positionBuffer = this.device.createBuffer({
@@ -325,18 +308,6 @@ export default class View {
             usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
         });
         this.device.queue.writeBuffer(tile.normalBuffer, 0, new Float32Array(normals));
-
-        tile.normalizedHeightBuffer = this.device.createBuffer({
-            size: Float32Array.from(normalizedHeights).byteLength,
-            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-        });
-        this.device.queue.writeBuffer(tile.normalizedHeightBuffer, 0, new Float32Array(normalizedHeights));
-
-        tile.isWaterBuffer = this.device.createBuffer({
-            size: Float32Array.from(isWater).byteLength,
-            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-        });
-        this.device.queue.writeBuffer(tile.isWaterBuffer, 0, new Float32Array(isWater));
 
         tile.waterDepthBuffer = this.device.createBuffer({
             size: Float32Array.from(waterDepths).byteLength,
@@ -369,8 +340,11 @@ export default class View {
         this.device.queue.writeBuffer(tile.indexBuffer, 0, indexData);
     }
 
-    updateGlobalParams(seaLevel, viewMode = 'standard') {
+    updateGlobalParams(seaLevel, viewMode = 'standard', renderParams = null, verticalExaggeration = 1.0) {
         if (this.globalParamsBuffer) {
+            const seaLevelOffset = renderParams?.seaLevelOffset ?? 0.0;
+            const heightMultiplier = renderParams?.heightMultiplier ?? 1.0;
+
             const viewModeMap = {
                 'standard': 0,
                 'water-depth': 1,
@@ -378,11 +352,17 @@ export default class View {
                 'sediment': 3
             };
             const viewModeIndex = viewModeMap[viewMode] ?? 0;
-            // The buffer expects a layout of { f32, u32, vec2<f32> } for 16-byte alignment.
-            // We write the f32 for seaLevel and u32 for viewMode.
-            const uniformData = new ArrayBuffer(16);
-            new Float32Array(uniformData, 0, 1)[0] = seaLevel;
-            new Uint32Array(uniformData, 4, 1)[0] = viewModeIndex;
+
+            // The buffer expects a layout that matches the `Globals` struct in the shader.
+            const uniformData = new ArrayBuffer(32); // 32 bytes for alignment
+            const floatView = new Float32Array(uniformData);
+            const uintView = new Uint32Array(uniformData);
+
+            floatView[0] = seaLevel;
+            floatView[1] = seaLevelOffset;
+            floatView[2] = heightMultiplier;
+            floatView[3] = verticalExaggeration;
+            uintView[4] = viewModeIndex; // At byte offset 16
             this.device.queue.writeBuffer(this.globalParamsBuffer, 0, uniformData);
         }
     }
@@ -417,7 +397,11 @@ export default class View {
         if (viewMode !== 'standard' && !this.flowRenderBindGroup) return;
 
         const projectionMatrix = mat4.create();
-        mat4.perspective(projectionMatrix, (45 * Math.PI) / 180, this.canvas.width / this.canvas.height, 0.1, 100);
+        // The near and far clipping planes must be scaled with the world size to avoid clipping issues.
+        // We can derive them from the camera's zoom limits, which are already world-scaled.
+        const nearPlane = this.camera.minZoom * 0.1;
+        const farPlane = this.camera.maxZoom * 2.0;
+        mat4.perspective(projectionMatrix, (45 * Math.PI) / 180, this.canvas.width / this.canvas.height, nearPlane, farPlane);
         this.device.queue.writeBuffer(this.projectionBuffer, 0, projectionMatrix);
 
         const viewMatrix = this.camera.getViewMatrix();
@@ -443,14 +427,11 @@ export default class View {
         for (const tile of this.tiles.values()) {
             if (!tile.indexBuffer) continue; // Skip tiles that aren't ready
 
-            const modelViewMatrix = mat4.create();
-            mat4.multiply(modelViewMatrix, viewMatrix, tile.modelMatrix);
-
             const normalMatrix = mat4.create();
-            mat4.invert(normalMatrix, modelViewMatrix);
+            mat4.invert(normalMatrix, tile.modelMatrix);
             mat4.transpose(normalMatrix, normalMatrix);
 
-            this.device.queue.writeBuffer(tile.modelViewBuffer, 0, modelViewMatrix);
+            this.device.queue.writeBuffer(tile.modelBuffer, 0, tile.modelMatrix);
             this.device.queue.writeBuffer(tile.normalMatBuffer, 0, normalMatrix);
 
             renderPass.setPipeline(activePipeline);
@@ -462,9 +443,7 @@ export default class View {
                 renderPass.setBindGroup(0, tile.renderBindGroup);
                 renderPass.setVertexBuffer(0, tile.positionBuffer);
                 renderPass.setVertexBuffer(1, tile.normalBuffer);
-                renderPass.setVertexBuffer(2, tile.normalizedHeightBuffer);
-                renderPass.setVertexBuffer(3, tile.isWaterBuffer);
-                renderPass.setVertexBuffer(4, tile.waterDepthBuffer);
+                renderPass.setVertexBuffer(2, tile.waterDepthBuffer);
             }
             renderPass.setIndexBuffer(tile.indexBuffer, this.indexFormat);
             renderPass.drawIndexed(tile.indexCount);

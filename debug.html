@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Simulation Data Debugger</title>
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="app-layout">
+        <aside id="controls" class="sidebar open"> <!-- Start open by default -->
+            <h2 class="sidebar-title">Debug Plotter</h2>
+
+            <details id="debug-section" class="control-section" open>
+                <summary>Data Visualization</summary>
+                <div class="control-group">
+                    <div id="erosion-debug-actions">
+                        <button id="load-capture-a" title="Load the primary capture file (A).">Load Data A</button>
+                        <button id="load-capture-b" title="Load a second capture file for comparison (B).">Load Data B</button>
+                        <button id="share-data" class="button-secondary" title="Copy plotted data to clipboard as JSON.">Share Data</button>
+                    </div>
+                    <div class="stats-container">
+                        <div class="stat-line"><span>Frames (A)</span><span id="stat-capture-a">0</span></div>
+                        <div class="stat-line"><span>Frames (B)</span><span id="stat-capture-b">0</span></div>
+                    </div>
+                    <hr>
+                    <label>
+                        <span>Metric Toggles</span>
+                        <div id="plot-metric-toggles"></div>
+                    </label>
+                </div>
+            </details>
+        </aside>
+
+        <main class="app-container">
+            <div id="plot-container" style="width: 100%; height: 100%;"></div>
+        </main>
+    </div>
+
+    <script src="js/debug_controller.js" type="module" defer></script>
+</body>
+</html>

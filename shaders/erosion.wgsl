@@ -16,6 +16,7 @@ struct Uniforms {
     seaLevel: f32,
     gridSize: u32,
     heightMultiplier: f32,
+    velocityDamping: f32,
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
@@ -49,62 +50,39 @@ fn main_water(@builtin(global_invocation_id) id: vec3<u32>) {
 fn main_flow(@builtin(global_invocation_id) id: vec3<u32>) {
     let pos = vec2<i32>(id.xy);
     if (pos.x >= i32(u.gridSize) || pos.y >= i32(u.gridSize)) { return; }
-    
+
     let h_c = textureLoad(terrain_read, pos, 0).r;
     let w_c = textureLoad(water_read, pos, 0).r;
-    
-    // Apply height multiplier to terrain and sea level to get world-space heights for flow calculation
-    let world_sea_level = u.seaLevel * u.heightMultiplier;
-    let H_c = max(h_c * u.heightMultiplier + w_c, world_sea_level);
+    let H_c = h_c * u.heightMultiplier + w_c;
 
-    // --- Calculate outflow flux to neighbors ---
-    let dims = vec2<i32>(textureDimensions(terrain_read));
-    var f_l: f32;
-    var f_r: f32;
-    var f_t: f32;
-    var f_b: f32;
+    // Sample neighbors' total water surface height
+    let h_l = textureLoad(terrain_read, pos + vec2(-1,0), 0).r;
+    let w_l = textureLoad(water_read, pos + vec2(-1,0), 0).r;
+    let H_l = h_l * u.heightMultiplier + w_l;
 
-    // Left neighbor
-    if (pos.x > 0) {
-        let h_n = textureLoad(terrain_read, pos + vec2(-1,0), 0).r;
-        let w_n = textureLoad(water_read, pos + vec2(-1,0), 0).r;
-        f_l = max(0.0, H_c - max(h_n * u.heightMultiplier + w_n, world_sea_level));
-    } else { f_l = 0.0; }
+    let h_r = textureLoad(terrain_read, pos + vec2(1,0), 0).r;
+    let w_r = textureLoad(water_read, pos + vec2(1,0), 0).r;
+    let H_r = h_r * u.heightMultiplier + w_r;
 
-    // Right neighbor
-    if (pos.x < dims.x - 1) {
-        let h_n = textureLoad(terrain_read, pos + vec2(1,0), 0).r;
-        let w_n = textureLoad(water_read, pos + vec2(1,0), 0).r;
-        f_r = max(0.0, H_c - max(h_n * u.heightMultiplier + w_n, world_sea_level));
-    } else { f_r = 0.0; }
+    let h_t = textureLoad(terrain_read, pos + vec2(0,-1), 0).r;
+    let w_t = textureLoad(water_read, pos + vec2(0,-1), 0).r;
+    let H_t = h_t * u.heightMultiplier + w_t;
 
-    // Top neighbor
-    if (pos.y > 0) {
-        let h_n = textureLoad(terrain_read, pos + vec2(0,-1), 0).r;
-        let w_n = textureLoad(water_read, pos + vec2(0,-1), 0).r;
-        f_t = max(0.0, H_c - max(h_n * u.heightMultiplier + w_n, world_sea_level));
-    } else { f_t = 0.0; }
+    let h_b = textureLoad(terrain_read, pos + vec2(0,1), 0).r;
+    let w_b = textureLoad(water_read, pos + vec2(0,1), 0).r;
+    let H_b = h_b * u.heightMultiplier + w_b;
 
-    // Bottom neighbor
-    if (pos.y < dims.y - 1) {
-        let h_n = textureLoad(terrain_read, pos + vec2(0,1), 0).r;
-        let w_n = textureLoad(water_read, pos + vec2(0,1), 0).r;
-        f_b = max(0.0, H_c - max(h_n * u.heightMultiplier + w_n, world_sea_level));
-    } else { f_b = 0.0; }
+    // Calculate gradient of the water surface height using central differences
+    let grad_x = (H_r - H_l) / 2.0;
+    let grad_y = (H_b - H_t) / 2.0;
 
-    // Scale total outflow to not exceed the amount of water in the current cell
-    let f_total = f_l + f_r + f_t + f_b;
-    if (f_total > 0.0) {
-        let scale = min(w_c * u.density, f_total) / f_total;
-        f_l *= scale;
-        f_r *= scale;
-        f_t *= scale;
-        f_b *= scale;
-    }
-
-    // Update velocity field based on net flow
+    // Update velocity field: v_new = v_old - dt * g * grad(H)
+    // We use density as a proxy for gravity 'g'. The negative sign is because water flows downhill (against the gradient).
     let vel_in = textureLoad(velocity_read, pos, 0).xy;
-    let vel_out = vel_in + vec2(f_l - f_r, f_t - f_b);
+    var vel_out = vel_in - u.dt * u.density * vec2(grad_x, grad_y);
+
+    // Dampen velocity to prevent instability and simulate friction
+    vel_out *= u.velocityDamping;
 
     textureStore(velocity_write, pos, vec4f(vel_out, 0.0, 0.0));
 }
@@ -150,19 +128,31 @@ fn main_transport(@builtin(global_invocation_id) id: vec3<u32>) {
     if (pos.x >= i32(u.gridSize) || pos.y >= i32(u.gridSize)) { return; }
 
     let v = textureLoad(velocity_read, pos, 0).xy;
-    // Find where the water/sediment came from by looking backwards along the velocity vector
+    // Find where the water/sediment came from by looking backwards along the velocity vector.
     let prev_pos_f = vec2f(pos) - v * u.dt;
-    let prev_pos_i = vec2<i32>(round(prev_pos_f));
 
-    // Clamp coordinates to be within bounds for safe reading
+    // Bilinear interpolation for smoother and more accurate advection
+    let p0 = floor(prev_pos_f);
+    let f = fract(prev_pos_f);
+
     let dims = vec2<i32>(textureDimensions(water_read));
-    let clamped_prev_pos = clamp(prev_pos_i, vec2<i32>(0), dims - vec2<i32>(1));
+    let i_p0 = clamp(vec2<i32>(p0), vec2<i32>(0), dims - vec2<i32>(1));
+    let i_p1 = clamp(vec2<i32>(p0 + vec2(1.0, 0.0)), vec2<i32>(0), dims - vec2<i32>(1));
+    let i_p2 = clamp(vec2<i32>(p0 + vec2(0.0, 1.0)), vec2<i32>(0), dims - vec2<i32>(1));
+    let i_p3 = clamp(vec2<i32>(p0 + vec2(1.0, 1.0)), vec2<i32>(0), dims - vec2<i32>(1));
 
-    let s_in = textureLoad(sediment_read, clamped_prev_pos, 0).r;
-    let w_in = textureLoad(water_read, clamped_prev_pos, 0).r;
+    // Sample sediment and water from the four neighboring cells
+    let s0 = textureLoad(sediment_read, i_p0, 0).r; let w0 = textureLoad(water_read, i_p0, 0).r;
+    let s1 = textureLoad(sediment_read, i_p1, 0).r; let w1 = textureLoad(water_read, i_p1, 0).r;
+    let s2 = textureLoad(sediment_read, i_p2, 0).r; let w2 = textureLoad(water_read, i_p2, 0).r;
+    let s3 = textureLoad(sediment_read, i_p3, 0).r; let w3 = textureLoad(water_read, i_p3, 0).r;
 
-    textureStore(sediment_write, pos, vec4f(s_in));
-    textureStore(water_write, pos, vec4f(w_in));
+    // Interpolate horizontally, then vertically
+    let s_out = mix(mix(s0, s1, f.x), mix(s2, s3, f.x), f.y);
+    let w_out = mix(mix(w0, w1, f.x), mix(w2, w3, f.x), f.y);
+
+    textureStore(sediment_write, pos, vec4f(s_out));
+    textureStore(water_write, pos, vec4f(w_out));
 }
 
 

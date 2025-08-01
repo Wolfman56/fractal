@@ -71,9 +71,12 @@ export class ScrollingShaderStrategy extends ShaderStrategy {
         uniformsU32[5] = params.octaves;
         uniforms[6] = params.heightMultiplier;
         uniforms[7] = params.hurst;
+        // worldOffset is at index 8 (vec2<f32>)
         uniforms[8] = params.worldOffset?.x ?? 0.0;
         uniforms[9] = params.worldOffset?.y ?? 0.0;
+        // lod is at offset 40
         uniformsU32[10] = tileParams?.lod ?? 0;
+        // origin is at offset 48 (4 bytes of padding after lod)
         uniforms[12] = tileParams?.origin?.x ?? 0.0;
         uniforms[13] = tileParams?.origin?.y ?? 0.0;
     }
@@ -218,5 +221,76 @@ export class PyramidShaderStrategy extends ShaderStrategy {
         // origin is at offset 48 (4 bytes of padding after lod)
         uniforms[12] = tileParams?.origin?.x ?? 0.0;
         uniforms[13] = tileParams?.origin?.y ?? 0.0;
+    }
+}
+
+/**
+ * A strategy that generates a static bowl shape.
+ * Useful for debugging water pooling and flow dynamics.
+ */
+export class BowlShaderStrategy extends ShaderStrategy {
+    constructor() {
+        super();
+        this.name = 'Bowl';
+        this.regeneratesOnZoom = false;
+        this.computeShaderUrl = '/shaders/compute_bowl.wgsl';
+    }
+
+    async createPipelines(device, layout) {
+        if (!this.computeShaderUrl) return;
+        try {
+            const response = await fetch(this.computeShaderUrl);
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            const code = await response.text();
+            if (code.trim().toLowerCase().startsWith('<!doctype')) throw new Error(`Received HTML instead of WGSL.`);
+
+            const module = device.createShaderModule({ code });
+            // This strategy uses a single-pass system with a 'main' entry point.
+            this.computePipeline = await device.createComputePipeline({ layout, compute: { module, entryPoint: 'main' } });
+        } catch (e) {
+            console.error(`Failed to create pipelines for strategy '${this.name}' with shader '${this.computeShaderUrl}'.`, e);
+            this.computePipeline = null;
+        }
+    }
+
+    prepareUniforms(arrayBuffer, params, tileParams) {
+        const uniformsU32 = new Uint32Array(arrayBuffer);
+        uniformsU32[0] = params.gridSize;
+        // The rest of the uniforms are not used by the bowl shader,
+        // but we must provide a value to satisfy the struct layout.
+    }
+}
+
+/**
+ * A strategy that generates a static 45-degree plane.
+ * Useful for creating a predictable initial state for validation.
+ */
+export class PlaneShaderStrategy extends ShaderStrategy {
+    constructor() {
+        super();
+        this.name = 'Plane';
+        this.regeneratesOnZoom = false;
+        this.computeShaderUrl = '/shaders/compute_plane.wgsl';
+    }
+
+    async createPipelines(device, layout) {
+        if (!this.computeShaderUrl) return;
+        try {
+            const response = await fetch(this.computeShaderUrl);
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            const code = await response.text();
+            if (code.trim().toLowerCase().startsWith('<!doctype')) throw new Error(`Received HTML instead of WGSL.`);
+
+            const module = device.createShaderModule({ code });
+            this.computePipeline = await device.createComputePipeline({ layout, compute: { module, entryPoint: 'main' } });
+        } catch (e) {
+            console.error(`Failed to create pipelines for strategy '${this.name}' with shader '${this.computeShaderUrl}'.`, e);
+            this.computePipeline = null;
+        }
+    }
+
+    prepareUniforms(arrayBuffer, params, tileParams) {
+        const uniformsU32 = new Uint32Array(arrayBuffer);
+        uniformsU32[0] = params.gridSize;
     }
 }

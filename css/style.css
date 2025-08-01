@@ -200,6 +200,22 @@ button:hover {
     background-color: #4a90c1;
 }
 
+button.state-clear {
+    background-color: #c82333; /* A danger/red color */
+}
+
+button.state-clear:hover {
+    background-color: #a71d2a;
+}
+
+button.state-copied {
+    background-color: #28a745; /* A success/green color */
+}
+
+button.state-copied:hover {
+    background-color: #218838;
+}
+
 .button-secondary {
     background-color: #6c757d; /* A neutral gray */
     width: 100%;

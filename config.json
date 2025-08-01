@@ -6,26 +6,39 @@
     "lacunarity": 2.0,
     "cycles": 1.0,
     "seed": 42,
-    "heightMultiplier": 0.5,
+    "heightMultiplier": 100.0,
     "hurst": 0.6,
     "worldOffset": {
       "x": 0,
       "y": 0
     }
   },
+  "world": {
+    "metersPerSide": 1024.0,
+    "dt": 0.01
+  },
   "erosion": {
     "model": "hydraulic",
-    "iterations": 5,
-    "wetness": 0.2,
-    "solubility": 0.5,
-    "deposition": 0.3,
-    "capacity": 20,
-    "seaLevel": 0.15
+    "iterations": 200,
+    "wetness": 0.1,
+    "solubility": 0.01,
+    "deposition": 0.5,
+    "capacity": 0.1,
+    "seaLevel": 0.15,
+    "density": 9.8
   },
   "simulation": {
-    "shaderStrategy": "Scrolling"
+    "shaderStrategy": "Plane"
+  },
+  "visuals": {
+    "verticalExaggeration":0.5
   },
   "ui": {
     "confirmOverwrite": true
+  },
+  "capture": {
+    "outputDirectoryPath": "downloads",
+    "overwriteSave": false,
+    "baseFilename": "sim_capture"
   }
 }

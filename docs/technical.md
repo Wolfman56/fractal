@@ -128,6 +128,11 @@ The project includes a GPU-based hydraulic erosion simulation based on the paper
       - **Save Capture Button**: Takes all captured frame data and serializes it into a JSON format. The resulting file contains a `data` array with the per-step metrics and a `history` array that logs every user command (Erode button clicks) along with the full set of simulation parameters for that command, ensuring full reproducibility.
       - **Clear Capture Button**: Discards all captured data and command history from memory.
     - **Data Plotting**: A sophisticated, interactive plotting tool is available for real-time analysis of captured data.
+    - **Validation Scripts**: To ensure the mathematical correctness of the GPU shaders, the project includes a powerful Python-based validation suite located in the `/test` directory.
+      - `erosion_cpu.py`: This script contains a complete, independent implementation of the erosion simulation in Python using the `numpy` and `scipy` libraries. It is refactored into a `CPUErosionModel` class, making it importable for advanced tasks like automated parameter optimization. When run from the command line, it takes a GPU capture file as input and produces a "golden master" JSON output, simulating the exact same steps with the exact same parameters.
+      - `simulation_compare.py`: This script takes the two JSON files (one from the GPU capture, one from `erosion_cpu.py`) and performs a detailed, frame-by-frame, pass-by-pass comparison. It prints a color-coded report to the terminal, highlighting any significant deviations between the two implementations and serving as the definitive tool for validating the physics model.
+      - `param_optimization.py`: A powerful tool that uses Bayesian optimization (`scikit-optimize`) to automatically discover simulation parameters that achieve a specific goal (e.g., "erode 5% of terrain height"). It repeatedly calls the `CPUErosionModel` to find the optimal values and saves them to a JSON file.
+
       - **Pop-out Window**: The plot is launched in a separate browser window, allowing it to be resized and positioned independently of the main application for easier analysis on multi-monitor setups.
       - **Metric Selection UI**: Instead of a simple list, metrics are selected via a series of toggle buttons. These toggles are grouped first by their simulation **Phase** (e.g., "Pass 3: Erosion") and then by **Type** (e.g., "terrain", "sediment"), providing a highly intuitive way to find and select related data points.
       - **Color-Coded Feedback**: Each simulation phase is assigned a unique color. This color is used for the phase title in the selection UI and is also applied to the corresponding subplot title and data trace in the plot window, creating a strong visual link between the controls and the output.
@@ -150,11 +155,15 @@ The project includes a GPU-based hydraulic erosion simulation based on the paper
 │ ├── tile.js # Class representing a single terrain tile
 │ ├── mat4.js # 4x4 matrix math library
 │ └── utils.js # Helper functions
+├── test/ # Validation and Test Scripts
+│ ├── erosion_cpu.py # CPU implementation of the erosion model
+│ ├── simulation_compare.py # Script to compare GPU and CPU outputs
+│ ├── param_optimization.py # Automated parameter optimizer
+│ └── requirements.txt # Python dependencies
 ├── shaders/ # WGSL shader files
 │ ├── render.wgsl # Vertex and Fragment shaders for rendering
 │ ├── erosion.wgsl # Compute shader for hydraulic erosion
-│ └── compute-.wgsl # Various compute shaders for terrain generation +
-├── test/ # HTML-based test runners
+│ └── compute_...wgsl # Various compute shaders for terrain generation
 ├── index.html # Main application entry point 
 ├── LICENSE 
 └── README.md

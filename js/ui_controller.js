@@ -25,7 +25,10 @@ export default class UIController {
 
         // Debug/Capture buttons
         document.getElementById('capture-toggle')?.addEventListener('click', this.callbacks.onToggleCapture);
+        document.getElementById('load-capture-a')?.addEventListener('click', this.callbacks.onDataButtonAClick);
+        document.getElementById('load-capture-b')?.addEventListener('click', this.callbacks.onDataButtonBClick);
         document.getElementById('save-capture')?.addEventListener('click', this.callbacks.onSaveCapture);
+        document.getElementById('share-data')?.addEventListener('click', this.callbacks.onShareData);
         document.getElementById('clear-capture')?.addEventListener('click', this.callbacks.onClearCapture);
 
         // Drawer
@@ -66,16 +69,12 @@ export default class UIController {
         });
 
         // Sliders that do not trigger regeneration
-        ['erosion-iterations', 'erosion-wetness', 'erosion-solubility', 'erosion-deposition', 'erosion-capacity', 'erosion-sea-level'].forEach(id => {
+        ['erosion-iterations', 'erosion-wetness', 'erosion-solubility', 'erosion-deposition', 'erosion-capacity', 'erosion-density', 'erosion-sea-level', 'verticalExaggeration'].forEach(id => {
             const slider = document.getElementById(id);
             if (slider) {
                 slider.addEventListener('input', () => {
                     this.updateSliderValue(id, slider.value);
-                    // The sea-level slider is special: it only triggers a redraw, not a full terrain regeneration.
-                    // This is because the render shader uses the seaLevel uniform to color the terrain.
-                    if (id === 'erosion-sea-level' && this.callbacks.onRedrawScene) {
-                        this.callbacks.onRedrawScene();
-                    }
+                    // The main game loop polls these values, so no special callback is needed.
                 });
             }
         });
@@ -113,6 +112,16 @@ export default class UIController {
             }
         }
 
+        // Set visual slider values
+        if (this.config.visuals) {
+            for (const [key, value] of Object.entries(this.config.visuals)) {
+                const slider = document.getElementById(key);
+                if (slider) {
+                    slider.value = value;
+                    this.updateSliderValue(key, value);
+                }
+            }
+        }
         // Set UI checkbox
         const confirmCheckbox = document.getElementById('confirm-overwrite');
         if (confirmCheckbox) {
@@ -166,7 +175,9 @@ export default class UIController {
 
     toggleDebugSection(selectedModel) {
         const debugSection = document.getElementById('debug-section');
-        if (debugSection) {
+        const erosionModelSelect = document.getElementById('erosion-model-select');
+        // This logic should only apply on the main page where the model can be changed.
+        if (debugSection && erosionModelSelect) {
             debugSection.style.display = selectedModel === 'hydraulic-debug' ? '' : 'none';
         }
     }
@@ -175,8 +186,13 @@ export default class UIController {
         const container = document.getElementById('plot-metric-toggles');
         if (!container) return;
 
+        if (this.isPlotMetricContainerEmpty()) {
+            // If the container is empty, clear any placeholder text before populating.
+            container.innerHTML = '';
+        }
+
         // Don't repopulate if it's already full of controls
-        if (container.children.length > 0) return;
+        if (container.children.length > 0 && container.children[0].tagName !== 'P') return;
 
         if (!captureData || captureData.length === 0 || !captureData[0].data) {
             container.textContent = 'No data to plot.';
@@ -257,6 +273,11 @@ export default class UIController {
         }
     }
 
+    isPlotMetricContainerEmpty() {
+        const container = document.getElementById('plot-metric-toggles');
+        return !container || container.children.length === 0 || container.children[0].tagName === 'P';
+    }
+
     /**
      * Updates the visual state (color) of the Erode button to match the current rain mode.
      * @param {boolean} isRaining - True if the current mode is 'rain', false otherwise.
@@ -296,5 +317,34 @@ export default class UIController {
         if (depositionEl) depositionEl.textContent = (deposition * 1000).toFixed(2);
         if (iterationsEl) iterationsEl.textContent = iterations;
         if (captureEl) captureEl.textContent = capturedFrames;
+    }
+
+    toggleDataButtonState(slot, hasData) {
+        const button = document.getElementById(`load-capture-${slot.toLowerCase()}`);
+        if (!button) return;
+
+        if (hasData) {
+            button.textContent = `Clear Data ${slot}`;
+            button.classList.add('state-clear');
+        } else {
+            button.textContent = `Load Data ${slot}`;
+            button.classList.remove('state-clear');
+        }
+    }
+
+    showShareConfirmation() {
+        const button = document.getElementById('share-data');
+        if (!button) return;
+
+        const originalText = button.textContent;
+        button.textContent = 'Copied!';
+        button.classList.add('state-copied');
+        button.disabled = true;
+
+        setTimeout(() => {
+            button.textContent = originalText;
+            button.classList.remove('state-copied');
+            button.disabled = false;
+        }, 2000);
     }
 }

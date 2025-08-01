@@ -15,19 +15,17 @@ export default class Tile {
         // GPU buffers for this tile's mesh
         this.positionBuffer = null;
         this.normalBuffer = null;
-        this.normalizedHeightBuffer = null;
-        this.isWaterBuffer = null;
         this.waterDepthBuffer = null;
         this.indexBuffer = null;
         this.indexCount = 0;
 
         // Per-tile uniform buffers and bind group
-        this.modelViewBuffer = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        this.modelBuffer = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         this.normalMatBuffer = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         this.renderBindGroup = device.createBindGroup({
             layout: renderPipeline.getBindGroupLayout(0),
             entries: [
-                { binding: 0, resource: { buffer: this.modelViewBuffer } },
+                { binding: 0, resource: { buffer: this.modelBuffer } },
                 { binding: 1, resource: { buffer: projectionBuffer } }, // Shared projection
                 { binding: 2, resource: { buffer: this.normalMatBuffer } },
                 { binding: 3, resource: { buffer: viewBuffer } }, // Shared view
@@ -38,7 +36,7 @@ export default class Tile {
 
     destroy() {
         // Clean up GPU resources when the tile is no longer needed.
-        [this.positionBuffer, this.normalBuffer, this.normalizedHeightBuffer, this.isWaterBuffer, this.waterDepthBuffer, this.indexBuffer,
-         this.modelViewBuffer, this.normalMatBuffer].forEach(b => b?.destroy());
+        [this.positionBuffer, this.normalBuffer, this.waterDepthBuffer, this.indexBuffer,
+         this.modelBuffer, this.normalMatBuffer].forEach(b => b?.destroy());
     }
 }

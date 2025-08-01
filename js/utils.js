@@ -1,7 +1,7 @@
-export function withTimeout(promise, ms) {
+export function withTimeout(promise, ms, name = 'Promise') {
     return new Promise((resolve, reject) => {
         const timeoutId = setTimeout(() => {
-            reject(new Error(`Promise timed out after ${ms} ms`));
+            reject(new Error(`${name} timed out after ${ms} ms`));
         }, ms);
 
         promise.then(resolve).catch(reject).finally(() => clearTimeout(timeoutId));
@@ -47,10 +47,11 @@ export function getPaddedByteRange(width, height, bytesPerPixel) {
  * @param {Float32Array} unpaddedSource The compact source data.
  * @param {number} width The width of the texture.
  * @param {number} height The height of the texture.
+ * @param {number} [bytesPerPixelOverride] - Explicit bytes per pixel. If not provided, it's inferred from the source array type.
  * @returns {{paddedBuffer: Uint8Array, bytesPerRow: number}}
  */
-export function padBuffer(unpaddedSource, width, height) {
-    const bytesPerPixel = unpaddedSource.BYTES_PER_ELEMENT;
+export function padBuffer(unpaddedSource, width, height, bytesPerPixelOverride) {
+    const bytesPerPixel = bytesPerPixelOverride || unpaddedSource.BYTES_PER_ELEMENT;
     const { bytesPerRow, bufferSize } = getPaddedByteRange(width, height, bytesPerPixel);
 
     const paddedBuffer = new Uint8Array(bufferSize);

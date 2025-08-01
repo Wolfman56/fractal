@@ -27,16 +27,15 @@ export default class InputHandler {
         this.canvas.addEventListener('mousedown', this.handleMouseDown.bind(this));
         this.canvas.addEventListener('mouseup', this.handleMouseUp.bind(this));
         this.canvas.addEventListener('mousemove', this.handleMouseMove.bind(this));
-        this.canvas.addEventListener('wheel', this.handleWheel.bind(this));
+        this.canvas.addEventListener('wheel', this.handleWheel.bind(this), { passive: false });
 
         // Touch events for camera. { passive: false } is important to allow preventDefault().
         this.canvas.addEventListener('touchstart', this.handleTouchStart.bind(this), { passive: false });
         this.canvas.addEventListener('touchend', this.handleTouchEnd.bind(this), { passive: false });
         this.canvas.addEventListener('touchmove', this.handleTouchMove.bind(this), { passive: false });
 
-        // Keyboard events for scrolling
-        window.addEventListener('keydown', this.handleKeyDown.bind(this));
         window.addEventListener('keyup', this.handleKeyUp.bind(this));
+        window.addEventListener('keydown', this.handleKeyDown.bind(this));
     }
 
     handleMouseDown(e) {
@@ -61,19 +60,16 @@ export default class InputHandler {
             this.view.camera.orbit(dx * 0.005, dy * 0.005);
             this.lastMouseX = e.clientX;
             this.lastMouseY = e.clientY;
-            this.view.drawScene();
         }
     }
 
     handleWheel(e) {
         e.preventDefault();
         const { currentModel } = this.getState();
-        // Scale down wheel zoom sensitivity.
-        this.view.camera.zoom(e.deltaY * 0.01);
+        // The delta is now a factor. A typical wheel event deltaY is ~100.
+        this.view.camera.zoom(e.deltaY * 0.001);
         if (currentModel?.shaderStrategy.regeneratesOnZoom) {
             this.onUpdate();
-        } else {
-            this.view.drawScene();
         }
     }
 
@@ -103,21 +99,18 @@ export default class InputHandler {
             this.view.camera.orbit(dx * 0.01, dy * 0.01);
             this.lastMouseX = e.touches[0].clientX;
             this.lastMouseY = e.touches[0].clientY;
-            this.view.drawScene();
         } else if (e.touches.length === 2 && this.lastPinchDist > 0) {
             const newPinchDist = this.getPinchDist(e);
             const delta = this.lastPinchDist - newPinchDist;
 
-            // Scale down pinch-to-zoom sensitivity
-            this.view.camera.zoom(delta * 0.02);
+            // The delta is now a factor.
+            this.view.camera.zoom(delta * 0.005);
 
             this.lastPinchDist = newPinchDist;
 
             const { currentModel } = this.getState();
             if (currentModel?.shaderStrategy.regeneratesOnZoom) {
                 this.onUpdate();
-            } else {
-                this.view.drawScene();
             }
         }
     }
@@ -130,15 +123,13 @@ export default class InputHandler {
         }
 
         // Camera dolly controls (move forward/backward without regenerating terrain)
-        const dollySpeed = 0.2; // A constant for how much to move per key press
+        const dollySpeedFactor = 0.05; // 5% of current distance per key press
         if (e.key === 'r') {
             e.preventDefault();
-            this.view.camera.zoom(dollySpeed); // zoom() with positive delta moves closer
-            this.view.drawScene();
+            this.view.camera.zoom(dollySpeedFactor); // zoom() with positive delta moves closer
         } else if (e.key === 'f') {
             e.preventDefault();
-            this.view.camera.zoom(-dollySpeed); // zoom() with negative delta moves away
-            this.view.drawScene();
+            this.view.camera.zoom(-dollySpeedFactor); // zoom() with negative delta moves away
         }
     }
 

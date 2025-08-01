@@ -76,8 +76,8 @@ export class HydraulicErosionModel extends ErosionModel {
         [this.uniformsBuffer, this.waterTextureA, this.waterTextureB, this.sedimentTextureA,
          this.sedimentTextureB, this.velocityTextureA, this.velocityTextureB, this.terrainTextureA, this.terrainTextureB].forEach(r => r?.destroy());
 
-        // Buffer size is 48 bytes to hold all uniforms including the new heightMultiplier.
-        this.uniformsBuffer = this.device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        // Buffer size is 52 bytes to hold all uniforms including cellSize.
+        this.uniformsBuffer = this.device.createBuffer({ size: 52, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
 
         const r32fDescriptor = {
             size: [gridSize, gridSize],
@@ -124,7 +124,7 @@ export class HydraulicErosionModel extends ErosionModel {
             flow:       createBindGroup(this.pipelines.flow.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, this.terrainTextureB), t(2, this.waterTextureA), t(4, this.velocityTextureB), t(8, this.velocityTextureA) ]),
             erosion:    createBindGroup(this.pipelines.erosion.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, this.terrainTextureB), t(2, this.waterTextureA), t(3, this.sedimentTextureA), t(4, this.velocityTextureA), t(5, this.terrainTextureA), t(7, this.sedimentTextureB) ]),
             transport:  createBindGroup(this.pipelines.transport.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, this.waterTextureA), t(3, this.sedimentTextureB), t(4, this.velocityTextureA), t(6, this.waterTextureB), t(7, this.sedimentTextureA) ]),
-            deposition: createBindGroup(this.pipelines.deposition.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, this.terrainTextureA), t(2, this.waterTextureB), t(3, this.sedimentTextureB), t(4, this.velocityTextureA), t(5, this.terrainTextureB), t(7, this.sedimentTextureA) ]),
+            deposition: createBindGroup(this.pipelines.deposition.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, this.terrainTextureA), t(2, this.waterTextureB), t(3, this.sedimentTextureA), t(4, this.velocityTextureA), t(5, this.terrainTextureB), t(7, this.sedimentTextureB) ]),
             evaporation:createBindGroup(this.pipelines.evaporation.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, this.waterTextureB), t(6, this.waterTextureA) ]),
         };
 
@@ -141,38 +141,46 @@ export class HydraulicErosionModel extends ErosionModel {
     resetState() {
         if (!this.waterTextureA) return; // Don't run if resources aren't created yet
 
-        const zeroData = new Float32Array(this.gridSize * this.gridSize);
-        const { paddedBuffer, bytesPerRow } = padBuffer(zeroData, this.gridSize, this.gridSize);
         const queue = this.device.queue;
         const textureSize = { width: this.gridSize, height: this.gridSize };
-        queue.writeTexture({ texture: this.waterTextureA }, paddedBuffer, { bytesPerRow }, textureSize);
-        queue.writeTexture({ texture: this.waterTextureB }, paddedBuffer, { bytesPerRow }, textureSize);
-        queue.writeTexture({ texture: this.sedimentTextureA }, paddedBuffer, { bytesPerRow }, textureSize);
-        queue.writeTexture({ texture: this.sedimentTextureB }, paddedBuffer, { bytesPerRow }, textureSize);
-        console.log("Hydraulic erosion state (water, sediment) has been reset.");
+
+        // Create and write a zero-buffer for the single-channel (r32float) textures
+        const zeroDataR32F = new Float32Array(this.gridSize * this.gridSize);
+        const { paddedBuffer: paddedR32F, bytesPerRow: bytesPerRowR32F } = padBuffer(zeroDataR32F, this.gridSize, this.gridSize);
+        queue.writeTexture({ texture: this.waterTextureA }, paddedR32F, { bytesPerRow: bytesPerRowR32F }, textureSize);
+        queue.writeTexture({ texture: this.waterTextureB }, paddedR32F, { bytesPerRow: bytesPerRowR32F }, textureSize);
+        queue.writeTexture({ texture: this.sedimentTextureA }, paddedR32F, { bytesPerRow: bytesPerRowR32F }, textureSize);
+        queue.writeTexture({ texture: this.sedimentTextureB }, paddedR32F, { bytesPerRow: bytesPerRowR32F }, textureSize);
+
+        // Create and write a zero-buffer for the four-channel (rgba32float) velocity textures
+        const zeroDataRGBA32F = new Float32Array(this.gridSize * this.gridSize * 4);
+        const { paddedBuffer: paddedRGBA32F, bytesPerRow: bytesPerRowRGBA32F } = padBuffer(zeroDataRGBA32F, this.gridSize, this.gridSize, 16); // Override bytesPerPixel for rgba32float
+        queue.writeTexture({ texture: this.velocityTextureA }, paddedRGBA32F, { bytesPerRow: bytesPerRowRGBA32F }, textureSize);
+        queue.writeTexture({ texture: this.velocityTextureB }, paddedRGBA32F, { bytesPerRow: bytesPerRowRGBA32F }, textureSize);
+        console.log("Hydraulic erosion state (water, sediment, velocity) has been reset.");
     }
 
     _prepareUniforms(params) {
-        // Buffer now holds 12 floats (48 bytes) to accommodate heightMultiplier
-        const uniformData = new Float32Array(12);
+        // Buffer now holds 13 floats (52 bytes)
+        const uniformData = new Float32Array(13);
         const uniformDataU32 = new Uint32Array(uniformData.buffer);
 
         // --- Simulation Tuning Parameters ---
-        // dt: The timestep. Larger values are faster but can be less stable.
-        // density: A proxy for gravity and cell area. Higher values increase water force.
-        uniformData[0] = 0.05; // dt
-        uniformData[1] = 9.8;  // density (as gravity)
+        uniformData[0] = params.dt;
+        uniformData[1] = params.density; // density (as gravity)
 
         // --- UI-Controlled Parameters ---
         uniformData[2] = params.evapRate;
         uniformData[3] = params.depositionRate;
         uniformData[4] = params.solubility;
-        uniformData[5] = 0.01; // minSlope
+        uniformData[5] = params.minSlope;
         uniformData[6] = params.capacityFactor;
         uniformData[7] = params.rainAmount;
         uniformData[8] = params.seaLevel;
-        uniformDataU32[9] = this.gridSize;
+        uniformDataU32[9] = params.gridSize;
         uniformData[10] = params.heightMultiplier;
+        uniformData[11] = params.velocityDamping;
+        uniformData[12] = params.cellSize;
         this.device.queue.writeBuffer(this.uniformsBuffer, 0, uniformData);
     }
 

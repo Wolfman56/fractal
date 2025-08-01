@@ -32,12 +32,21 @@
                     <label><span>Persistence</span><input type="range" id="persistence" min="0.1" max="1" step="0.05"><span id="persistence-value"></span></label>
                     <label><span>Lacunarity</span><input type="range" id="lacunarity" min="1" max="4" step="0.1"><span id="lacunarity-value"></span></label>
                     <label><span>Cycles</span><input type="range" id="cycles" min="1" max="8" step="0.1"><span id="cycles-value"></span></label>
-                    <label><span>Seed</span><input type="range" id="seed" min="0" max="10000"><span id="seed-value"></span></label>
-                    <label><span>Height Multiplier</span><input type="range" id="heightMultiplier" min="0.1" max="5" step="0.1"><span id="heightMultiplier-value"></span></label>
+                    <label><span>Seed</span><input type="range" id="seed" min="0" max="10000" step="1"><span id="seed-value"></span></label>
+                    <label><span>Height Multiplier</span><input type="range" id="heightMultiplier" min="10" max="250" step="1"><span id="heightMultiplier-value"></span></label>
                     <label><span>Hurst</span><input type="range" id="hurst" min="0.1" max="2" step="0.1"><span id="hurst-value"></span></label>
                 </div>
                 <div class="action-button-container">
                     <button id="regenerate">Regenerate</button>
+                </div>
+            </details>
+
+            <details class="control-section">
+                <summary>Visuals</summary>
+                <div class="control-group">
+                    <label>
+                        <span>Visual Aspect Ratio</span><input type="range" id="verticalExaggeration" min="0.1" max="2.0" step="0.05"><span id="verticalExaggeration-value"></span>
+                    </label>
                 </div>
             </details>
 
@@ -52,7 +61,8 @@
                     <label><span>Wetness</span><input type="range" id="erosion-wetness" min="0.01" max="1.0" step="0.01"><span id="erosion-wetness-value"></span></label>
                     <label><span>Solubility</span><input type="range" id="erosion-solubility" min="0.01" max="1.0" step="0.01"><span id="erosion-solubility-value"></span></label>
                     <label><span>Deposition Rate</span><input type="range" id="erosion-deposition" min="0.01" max="1.0" step="0.01"><span id="erosion-deposition-value"></span></label>
-                    <label><span>Capacity</span><input type="range" id="erosion-capacity" min="1" max="64" step="1"><span id="erosion-capacity-value"></span></label>
+                    <label><span>Capacity</span><input type="range" id="erosion-capacity" min="0.01" max="1.0" step="0.01"><span id="erosion-capacity-value"></span></label>
+                    <label><span>Density (g)</span><input type="range" id="erosion-density" min="1.0" max="100.0" step="0.1"><span id="erosion-density-value"></span></label>
                     <label><span>Sea Level</span><input type="range" id="erosion-sea-level" min="0.0" max="1.0" step="0.01"><span id="erosion-sea-level-value"></span></label>
                 </div>
                 <div class="action-button-container">
