@@ -4,7 +4,9 @@ import re
 
 def camel_to_snake(name):
     """Converts a camelCase string to snake_case."""
-    name = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+    # This handles cases like 'camelCase' -> 'camel_case'
+    name = re.sub(r'(.)([A-Z][a-z]+)', r'\1_\2', name)
+    # This handles cases like 'MyAPI' -> 'my_api' and ensures single-word keys are handled.
     return re.sub('([a-z0-9])([A-Z])', r'\1_\2', name).lower()
 
 class CPUErosionModel:
@@ -59,8 +61,10 @@ class CPUErosionModel:
     def set_params(self, param_dict, add_rain=False):
         for key, value in param_dict.items():
             snake_key = camel_to_snake(key)
-            if hasattr(self.params, snake_key):
-                setattr(self.params, snake_key, value)
+            if not hasattr(self.params, snake_key):
+                # print(f"Warning: Parameter '{key}' (as '{snake_key}') not found in CPU model, skipping.")
+                continue
+            setattr(self.params, snake_key, value)
         self.params.add_rain = add_rain
 
     def run_single_step(self):

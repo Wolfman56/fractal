@@ -136,7 +136,7 @@ fn main_transport(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let v = textureLoad(velocity_read, pos, 0).xy;
     // Find where the water/sediment came from by looking backwards along the velocity vector.
-    let prev_pos_f = vec2f(pos) - v * u.dt;
+    let prev_pos_f = vec2f(pos) - (v * u.dt) / u.cellSize;
 
     // Bilinear interpolation for smoother and more accurate advection
     let p0 = floor(prev_pos_f);

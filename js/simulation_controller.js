@@ -149,6 +149,7 @@ export default class SimulationController {
         const wetness = parseFloat(document.getElementById('erosion-wetness')?.value || '0.2');
         const gridSize = Math.pow(2, parseInt(document.getElementById('gridSize').value, 10));
         const { metersPerSide, dt } = this.config.world;
+        const heightMultiplier = parseFloat(document.getElementById('heightMultiplier')?.value || '100.0');
 
         // The UI 'wetness' slider [0.01, 1.0] now directly controls the amount of rain
         // added per step, scaled to a more effective range (e.g., 0.1mm to 10mm).
@@ -173,7 +174,7 @@ export default class SimulationController {
             evapRate: evapRate_per_s,
             dt: dt,
             cellSize: metersPerSide / gridSize,
-            heightMultiplier: 1.0, // For physics, heightmap is already in meters.
+            heightMultiplier: heightMultiplier,
             minSlope: 0.01,
             velocityDamping: 0.99,
         };
