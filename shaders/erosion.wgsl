@@ -74,8 +74,8 @@ fn main_flow(@builtin(global_invocation_id) id: vec3<u32>) {
     let H_b = h_b * u.heightMultiplier + w_b;
 
     // Calculate gradient of the water surface height using central differences
-    let grad_x = (H_r - H_l) / 2.0;
-    let grad_y = (H_b - H_t) / 2.0;
+    let grad_x = (H_r - H_l) / (2.0 * u.cellSize);
+    let grad_y = (H_b - H_t) / (2.0 * u.cellSize);
 
     // Update velocity field: v_new = v_old - dt * g * grad(H)
     // We use density as a proxy for gravity 'g'. The negative sign is because water flows downhill (against the gradient).
@@ -114,7 +114,7 @@ fn main_erosion(@builtin(global_invocation_id) id: vec3<u32>) {
     // ERODE ONLY
     // If water has capacity, erode terrain and add to sediment
     if (capacity > s_in) {
-        let amount_to_erode = (capacity - s_in) * u.depositionRate;
+        let amount_to_erode = (capacity - s_in) * u.solubility;
         // Don't erode more than the terrain height itself
         let final_erosion_amount = min(amount_to_erode, h_in);
 

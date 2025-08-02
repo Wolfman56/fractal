@@ -3,8 +3,8 @@ import UIController from './ui_controller.js';
 class DebugController {
     constructor() {
         this.uiController = null;
-        this.captureDataA = [];
-        this.captureDataB = [];
+        this.captureDataA = {};
+        this.captureDataB = {};
         this.filenameA = null;
         this.filenameB = null;
         this.plotMetrics = [];
@@ -27,7 +27,7 @@ class DebugController {
 
     handleDataButtonClick(slot) {
         const data = (slot === 'A') ? this.captureDataA : this.captureDataB;
-        if (data.length > 0) {
+        if (Object.keys(data).length > 0) {
             this.clearCaptureData(slot);
         } else {
             this.loadCaptureData(slot);
@@ -36,11 +36,11 @@ class DebugController {
 
     clearCaptureData(slot) {
         if (slot === 'A') {
-            this.captureDataA = [];
+            this.captureDataA = {};
             this.filenameA = null;
             document.getElementById('stat-capture-a').textContent = 0;
         } else {
-            this.captureDataB = [];
+            this.captureDataB = {};
             this.filenameB = null;
             document.getElementById('stat-capture-b').textContent = 0;
         }
@@ -62,21 +62,38 @@ class DebugController {
             reader.onload = (event) => {
                 try {
                     const json = JSON.parse(event.target.result);
-                    const data = json.data || [];
+                    let data = json.data || null;
+
+                    // Handle the format from the "Share Data" button, which uses 'plotData'.
+                    // This makes loading shared files more convenient for debugging, as users
+                    // might save the shared JSON and try to load it back.
+                    if (!data && json.plotData) {
+                        console.warn("Attempting to load a 'shared' data file. Only 'traceA' will be used if available.");
+                        data = {};
+                        for (const metricKey in json.plotData) {
+                            // Prioritize traceA, but fall back to traceB if A isn't there.
+                            const trace = json.plotData[metricKey]?.traceA || json.plotData[metricKey]?.traceB;
+                            if (trace && Array.isArray(trace)) {
+                                data[metricKey] = trace;
+                            }
+                        }
+                    }
+                    data = data || {}; // Ensure data is an object if it's still null.
+                    const frameCount = Object.keys(data).length > 0 ? (data[Object.keys(data)[0]]?.length || 0) : 0;
 
                     if (targetSlot === 'A') {
                         this.captureDataA = data;
                         this.filenameA = baseName;
-                        document.getElementById('stat-capture-a').textContent = data.length;
+                        document.getElementById('stat-capture-a').textContent = frameCount;
                     } else {
                         this.captureDataB = data;
                         this.filenameB = baseName;
-                        document.getElementById('stat-capture-b').textContent = data.length;
+                        document.getElementById('stat-capture-b').textContent = frameCount;
                     }
 
-                    console.log(`Loaded ${data.length} frames of data into slot ${targetSlot}.`);
+                    console.log(`Loaded ${frameCount} frames of data into slot ${targetSlot}.`);
                     // Populate metrics based on the first available dataset.
-                    const primaryData = this.captureDataA.length > 0 ? this.captureDataA : this.captureDataB;
+                    const primaryData = Object.keys(this.captureDataA).length > 0 ? this.captureDataA : this.captureDataB;
                     this.uiController.populatePlotMetrics(primaryData);
                     this.uiController.toggleDataButtonState(targetSlot, true);
                     this._renderPlot(); // Render after state and UI are updated
@@ -96,7 +113,7 @@ class DebugController {
     }
 
     async sharePlotData() {
-        if (this.plotMetrics.length === 0 || (this.captureDataA.length === 0 && this.captureDataB.length === 0)) {
+        if (this.plotMetrics.length === 0 || (Object.keys(this.captureDataA).length === 0 && Object.keys(this.captureDataB).length === 0)) {
             alert("No data to share. Please load data and select metrics first.");
             return;
         }
@@ -111,23 +128,16 @@ class DebugController {
         };
 
         const extractTraceForSharing = (metricKey, captureData) => {
-            const trace = [];
-            const [passKey, propKey] = metricKey.split('.');
-            for (const frame of captureData) {
-                const val = frame.data?.[passKey]?.[propKey];
-                if (val !== undefined) {
-                    trace.push({ frame: frame.frame, value: parseFloat(val) });
-                }
-            }
-            return trace;
+            // The data is already in the compact format we want to share.
+            return captureData[metricKey] || [];
         };
 
         for (const metricKey of this.plotMetrics) {
             sharedDataObject.plotData[metricKey] = {};
-            if (this.captureDataA.length > 0) {
+            if (Object.keys(this.captureDataA).length > 0) {
                 sharedDataObject.plotData[metricKey].traceA = extractTraceForSharing(metricKey, this.captureDataA);
             }
-            if (this.captureDataB.length > 0) {
+            if (Object.keys(this.captureDataB).length > 0) {
                 sharedDataObject.plotData[metricKey].traceB = extractTraceForSharing(metricKey, this.captureDataB);
             }
         }
@@ -147,7 +157,7 @@ class DebugController {
         const plotContainer = document.getElementById('plot-container');
         if (!plotContainer) return;
 
-        if (this.plotMetrics.length === 0 || (this.captureDataA.length === 0 && this.captureDataB.length === 0)) {
+        if (this.plotMetrics.length === 0 || (Object.keys(this.captureDataA).length === 0 && Object.keys(this.captureDataB).length === 0)) {
             plotContainer.innerHTML = `
                 <div class="placeholder-container" style="display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100%; text-align: center;">
                     <h1>Data Visualizer</h1>
@@ -183,15 +193,8 @@ class DebugController {
         };
 
         const extractTrace = (metricKey, captureData) => {
-            const x = [], y = [];
-            const [passKey, propKey] = metricKey.split('.');
-            for (const frame of captureData) {
-                const val = frame.data?.[passKey]?.[propKey];
-                if (val !== undefined) {
-                    x.push(frame.frame);
-                    y.push(parseFloat(val));
-                }
-            }
+            const y = captureData[metricKey] || [];
+            const x = y.map((_, i) => i); // Infer X values from array index
             return { x, y };
         };
 
@@ -204,13 +207,13 @@ class DebugController {
             const [passKey, propKey] = metricKey.split('.');
             const color = this._getPhaseColor(passKey);
 
-            if (this.captureDataA.length > 0) {
+            if (Object.keys(this.captureDataA).length > 0) {
                 const { x, y } = extractTrace(metricKey, this.captureDataA);
                 const nameA = this.filenameA || 'Data A';
                 traces.push({ x, y, type: 'scatter', mode: 'lines', name: nameA, legendgroup: 'A', showlegend: yAxisNum === 1, yaxis: yAxisID, line: { color: color } });
             }
 
-            if (this.captureDataB.length > 0) {
+            if (Object.keys(this.captureDataB).length > 0) {
                 const { x, y } = extractTrace(metricKey, this.captureDataB);
                 const colorB = this._modifyColor(color, 0.4); // Lighten color for better contrast on dark background
                 const nameB = this.filenameB || 'Data B';

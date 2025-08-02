@@ -11,7 +11,7 @@ export default class SimulationCapture {
         this.config = config;
         this.isCapturing = false;
         this.commandHistory = [];
-        this.debugCaptureData = [];
+        this.debugCaptureData = {};
         this.frameCount = 0;
     }
 
@@ -77,13 +77,13 @@ export default class SimulationCapture {
      * @returns {boolean} - True if data was cleared, false otherwise.
      */
     clear() {
-        if (this.commandHistory.length === 0 && this.debugCaptureData.length === 0) {
+        if (this.commandHistory.length === 0 && Object.keys(this.debugCaptureData).length === 0) {
             return false; // Nothing to clear
         }
         if (window.confirm("Are you sure you want to clear all captured data? This cannot be undone.")) {
             this.isCapturing = false;
             this.commandHistory = [];
-            this.debugCaptureData = [];
+            this.debugCaptureData = {};
             this.frameCount = 0;
             console.log("Capture data cleared.");
             return true;
@@ -92,5 +92,18 @@ export default class SimulationCapture {
     }
 
     recordCommand(command) { if (!this.isCapturing) return; this.commandHistory.push(command); }
-    addFrame(frame, data) { if (!this.isCapturing) return; this.debugCaptureData.push({ frame, data }); this.frameCount = this.debugCaptureData.length; }
+    addFrame(frame, data) {
+        if (!this.isCapturing) return;
+
+        for (const passKey in data) { // e.g., 'pass1_water'
+            for (const metricKey in data[passKey]) { // e.g., 'sum', 'avg'
+                const fullMetricKey = `${passKey}.${metricKey}`;
+                if (!this.debugCaptureData[fullMetricKey]) {
+                    this.debugCaptureData[fullMetricKey] = [];
+                }
+                this.debugCaptureData[fullMetricKey].push(data[passKey][metricKey]);
+            }
+        }
+        this.frameCount++;
+    }
 }

@@ -210,7 +210,7 @@ export default class UIController {
         // Don't repopulate if it's already full of controls
         if (container.children.length > 0 && container.children[0].tagName !== 'P') return;
 
-        if (!captureData || captureData.length === 0 || !captureData[0].data) {
+        if (!captureData || Object.keys(captureData).length === 0) {
             container.textContent = 'No data to plot.';
             return;
         }
@@ -224,17 +224,19 @@ export default class UIController {
             'pass6_': { name: 'Pass 6: Evaporation', colorClass: 'phase-6-color', metrics: {} },
         };
 
-        const firstFrameData = captureData[0].data;
-        for (const passKey in firstFrameData) { // e.g., pass1_water
-            for (const propKey in firstFrameData[passKey]) { // e.g., sum
-                for (const phasePrefix in phaseInfo) {
-                    if (passKey.startsWith(phasePrefix)) {
-                        if (!phaseInfo[phasePrefix].metrics[passKey]) {
-                            phaseInfo[phasePrefix].metrics[passKey] = [];
-                        }
-                        phaseInfo[phasePrefix].metrics[passKey].push(propKey);
-                        break;
+        const allMetricKeys = Object.keys(captureData);
+        for (const fullMetricKey of allMetricKeys) {
+            const [passKey, propKey] = fullMetricKey.split('.');
+            for (const phasePrefix in phaseInfo) {
+                if (passKey.startsWith(phasePrefix)) {
+                    if (!phaseInfo[phasePrefix].metrics[passKey]) {
+                        phaseInfo[phasePrefix].metrics[passKey] = [];
                     }
+                    // Avoid duplicates if somehow the key appears multiple times
+                    if (!phaseInfo[phasePrefix].metrics[passKey].includes(propKey)) {
+                        phaseInfo[phasePrefix].metrics[passKey].push(propKey);
+                    }
+                    break;
                 }
             }
         }

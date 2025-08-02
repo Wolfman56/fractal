@@ -97,8 +97,8 @@ class CPUErosionModel:
 
     def _run_transport_pass(self):
         y_coords, x_coords = np.mgrid[0:self.grid_size, 0:self.grid_size]
-        prev_y = y_coords - self.state.v[:, :, 1] * self.params.dt # dt is already snake_case
-        prev_x = x_coords - self.state.v[:, :, 0] * self.params.dt # dt is already snake_case
+        prev_y = y_coords - (self.state.v[:, :, 1] * self.params.dt) / self.params.cell_size
+        prev_x = x_coords - (self.state.v[:, :, 0] * self.params.dt) / self.params.cell_size
         coords = np.array([prev_y.ravel(), prev_x.ravel()])
         self.state.w = map_coordinates(self.state.w, coords, order=1, mode='nearest').reshape(self.state.w.shape)
         self.state.s = map_coordinates(self.state.s, coords, order=1, mode='nearest').reshape(self.state.s.shape)

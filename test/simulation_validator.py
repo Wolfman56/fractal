@@ -39,7 +39,7 @@ def main(input_file_path, results_directory_path):
     print(f"  - Terrain Height: Sum={np.sum(model.state.h):.4f}")
     print("-" * 30)
 
-    python_data_capture = []
+    python_data_capture = {}
     total_iterations = 0
 
     for command in capture['history']:
@@ -50,29 +50,29 @@ def main(input_file_path, results_directory_path):
             # To correctly mimic the GPU capture, we must run each pass
             # individually and capture the metrics in between.
             data = {}
-
             model._run_water_pass()
             data["pass1_water"] = model.state.get_metrics(model.state.w)
-
             model._run_flow_pass()
             data["pass2_velocity"] = model.state.get_metrics(model.state.v)
-
             model._run_erosion_pass()
             data["pass3_terrain"] = model.state.get_metrics(model.state.h)
             data["pass3_sediment"] = model.state.get_metrics(model.state.s)
-
             model._run_transport_pass()
             data["pass4_water"] = model.state.get_metrics(model.state.w)
             data["pass4_sediment"] = model.state.get_metrics(model.state.s)
-
             model._run_deposition_pass()
             data["pass5_terrain"] = model.state.get_metrics(model.state.h)
             data["pass5_sediment"] = model.state.get_metrics(model.state.s)
-
             model._run_evaporation_pass()
             data["pass6_water"] = model.state.get_metrics(model.state.w)
 
-            python_data_capture.append({"frame": total_iterations, "data": data})
+            for pass_key, metrics in data.items():
+                for metric_key, value in metrics.items():
+                    full_metric_key = f"{pass_key}.{metric_key}"
+                    if full_metric_key not in python_data_capture:
+                        python_data_capture[full_metric_key] = []
+                    python_data_capture[full_metric_key].append(value)
+
             total_iterations += 1
 
     base_name = os.path.basename(input_file_path)
