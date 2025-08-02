@@ -45,6 +45,7 @@ export default class SimulationController {
         this.lastErosionAmount = -1;
         this.rainActive = false;
         this.viewMode = 'standard';
+        this.captureDirectory = null;
 
         // State for the pop-out plot window
         this.plotWindow = null;
@@ -119,6 +120,7 @@ export default class SimulationController {
                 }
             }
 
+
             // Parameters that define the fundamental shape of the world.
             // A change in these requires resetting the normalization range. Navigation via
             // zoom (scale) or pan (worldOffset) should not reset the normalization.
@@ -148,10 +150,9 @@ export default class SimulationController {
         const gridSize = Math.pow(2, parseInt(document.getElementById('gridSize').value, 10));
         const { metersPerSide, dt } = this.config.world;
 
-        // The UI 'wetness' slider [0.01, 1.0] now represents a rain rate in mm/s.
-        const rainRate_mm_s = wetness;
-        const rainRate_m_s = rainRate_mm_s / 1000.0;
-        const rainAmount_per_step = rainRate_m_s * dt;
+        // The UI 'wetness' slider [0.01, 1.0] now directly controls the amount of rain
+        // added per step, scaled to a more effective range (e.g., 0.1mm to 10mm).
+        const rainAmount_per_step = wetness * 0.001;
 
         // The evaporation rate is also derived from wetness. We treat it as a fraction per second.
         // The shader will multiply it by dt. A wetness of 1.0 means 0 evaporation.
@@ -178,8 +179,6 @@ export default class SimulationController {
         };
     }
 
-
-
     async erodeTerrain() {
         if (this.isEroding) return;
         if (!this.currentModel.lastGeneratedHeightmap) return;
@@ -187,68 +186,49 @@ export default class SimulationController {
         const iterations = parseInt(document.getElementById('erosion-iterations')?.value || '10', 10);
         const erosionParams = this._getErosionParamsFromUI();
 
-        // Record the command if capturing is active. This is done before the
-        // simulation runs to log the intended action.
-        this.simulationCapture.recordCommand({
-            step: this.totalErosionIterations,
-            rain: this.rainActive,
-            iterations: iterations,
-            params: erosionParams
-        });
-
         this.isEroding = true;
         this.wantsUpdate = false;
 
-        // The behavior of the "Erode" button now depends on the Rain/Dry toggle.
-        // If rain is active, each iteration will add water.
         const stepParams = { ...erosionParams, addRain: this.rainActive };
 
         try {
-            if (this.simulationCapture.isCapturing && this.currentErosionModel instanceof HydraulicErosionModelDebug) {
-                // In debug/capture mode, run one step at a time, respecting the addRain flag.
-                // _runSingleErosionStep now correctly handles state swapping internally.
-                for (let i = 0; i < iterations; i++) { // The stepParams are passed to each iteration
-                    const { heights, waterHeights, erosionAmount, depositionAmount } = await this._runSingleErosionStep(stepParams);
+            const isDebugMode = this.simulationCapture.isCapturing && this.currentErosionModel instanceof HydraulicErosionModelDebug;
+
+            if (isDebugMode) {
+                // In debug/capture mode, run one step at a time to update the view and capture data.
+                // We record a command for each individual step to ensure the history is replayable.
+                this.simulationCapture.recordCommand({
+                    step: this.totalErosionIterations,
+                    rain: this.rainActive,
+                    iterations: iterations, // Log the total requested iterations for context
+                    params: erosionParams
+                });
+                for (let i = 0; i < iterations; i++) {
+                    const { heights, waterHeights, erosionAmount, depositionAmount } = await this._runSingleDebugStep(stepParams);
                     this.totalErosionIterations++;
                     if (heights) {
                         this.view.updateTileMesh('0,0', heights, this.currentModel.lastGeneratedParams, waterHeights);
-                        this.currentModel.lastGeneratedHeightmap = heights; // Keep CPU-side cache in sync
+                        this.currentModel.lastGeneratedHeightmap = heights;
                         this.uiController.updateStats(erosionAmount, depositionAmount, this.totalErosionIterations, this.simulationCapture.frameCount);
-                        // After each step, we must manually update uniforms and draw the scene.
                         this.view.updateGlobalParams(stepParams.seaLevel, this.viewMode);
                         this.view.drawScene(this.viewMode);
                     }
                 }
-                // After the debug loop, the final state is on the GPU. We need to read it back
-                // to the CPU cache to ensure consistency with the standard erosion path.
-                const { bytesPerRow, bufferSize } = getPaddedByteRange(this.currentModel.gridSize, this.currentModel.gridSize, 4);
-                const stagingBuffer = this.device.createBuffer({ size: bufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-                const encoder = this.device.createCommandEncoder();
-                encoder.copyTextureToBuffer({ texture: this.currentModel.heightmapTextureA }, { buffer: stagingBuffer, bytesPerRow }, { width: this.currentModel.gridSize, height: this.currentModel.gridSize });
-                this.device.queue.submit([encoder.finish()]);
-                await stagingBuffer.mapAsync(GPUMapMode.READ);
-                const finalHeights = this.currentModel._unpadBuffer(stagingBuffer.getMappedRange(), this.currentModel.gridSize, this.currentModel.gridSize, bytesPerRow);
-                if (finalHeights) {
-                    this.currentModel.lastGeneratedHeightmap = finalHeights;
-                }
             } else {
-                // In batch mode, `runErosion` will receive the addRain flag from the toggle.
+                // In standard mode, run all iterations in a single batch for performance.
+                // Record one command for the entire batch.
+                this.simulationCapture.recordCommand({
+                    step: this.totalErosionIterations,
+                    rain: this.rainActive,
+                    iterations: iterations,
+                    params: erosionParams
+                });
 				const { heights, waterHeights, erosionAmount, depositionAmount } = await this.currentModel.runErosion(iterations, stepParams, this.currentErosionModel);
                 this.totalErosionIterations += iterations;
                 this.lastErosionAmount = erosionAmount + depositionAmount;
                 if (heights) {
                     this.view.updateTileMesh('0,0', heights, this.currentModel.lastGeneratedParams, waterHeights);
                     this.uiController.updateStats(erosionAmount, depositionAmount, this.totalErosionIterations, this.simulationCapture.frameCount);
-                    // If we are in a heatmap view, we must update the view's textures before drawing.
-                    if (this.viewMode !== 'standard' && this.currentErosionModel instanceof HydraulicErosionModelDebug) {
-                        this.view.updateFlowMapTextures(
-                            this.currentErosionModel.waterTextureA,
-                            this.currentErosionModel.velocityTextureA,
-                            this.currentModel.heightmapTextureA,
-                            this.currentErosionModel.sedimentTextureA
-                        );
-                    }
-                    // Manually update global uniforms before drawing outside the main game loop.
                     this.view.updateGlobalParams(stepParams.seaLevel, this.viewMode);
                     this.view.drawScene(this.viewMode);
                 }
@@ -262,7 +242,6 @@ export default class SimulationController {
 
     /**
      * Sets the simulation's rain mode based on UI interaction.
-     * This is a state setter, not an action. It does not trigger a simulation.
      * @param {string} mode - The new mode, either 'rain' or 'dry'.
      */
     setRainMode(mode) {
@@ -277,7 +256,7 @@ export default class SimulationController {
         this.uiController.updateCaptureButtonState(this.simulationCapture.isCapturing);
     }
 
-    saveCaptureData() {
+    async saveCaptureData() {
         // Find the key/name of the current erosion model to append to the filename.
         const modelKey = Object.keys(this.erosionModels).find(key => this.erosionModels[key] === this.currentErosionModel);
 
@@ -288,9 +267,32 @@ export default class SimulationController {
             this.simulationCapture.config.baseFilename = `${originalFilename}_${modelKey}`;
         }
 
-        this.simulationCapture.save();
+        // Pass the parameters used to generate the current terrain to the save function.
+        const generationParams = this.currentModel.lastGeneratedParams;
+        await this.simulationCapture.save(generationParams);
         this.simulationCapture.config.baseFilename = originalFilename; // Restore for subsequent saves
+
+        // Provide visual feedback to the user that the save is complete.
+        this.uiController.showSaveConfirmation();
     }
+
+    async setCaptureDirectory(directory) {
+        if (!directory) {
+            this.captureDirectory = null;
+            this.simulationCapture.config.outputDirectoryPath = 'downloads';
+            console.log('Capture directory reset to default (downloads).');
+        }
+        else {
+            this.captureDirectory = directory;
+            this.simulationCapture.config.outputDirectoryPath = directory;
+            console.log('Capture directory set programmatically.');
+        }
+        this.uiController.updateCaptureDirectoryDisplay(directory);
+
+        //save capture directory to local storage here
+        //localStorage.setItem('savedDirectory', directory);
+    }
+
 
     clearCaptureData() {
         if (this.simulationCapture.clear()) {
@@ -311,55 +313,56 @@ export default class SimulationController {
         }
     }
 
-    async _runSingleErosionStep(erosionParams) {
-        let results;
-        const isDebugStep = this.simulationCapture.isCapturing && this.currentErosionModel instanceof HydraulicErosionModelDebug;
+    /**
+     * Runs a single step of the erosion simulation in debug mode, capturing detailed metrics.
+     * @param {object} erosionParams - The parameters for the erosion step.
+     * @returns {Promise<object>} A promise that resolves with the final heights, water heights, and metrics.
+     */
+    async _runSingleDebugStep(erosionParams) {
+        // 1. Execute the GPU commands for one erosion step and capture the raw data.
+        const captureResults = await this._executeAndCaptureDebugStep(erosionParams);
 
-        if (isDebugStep) {
-            // --- DEBUG PATH ---
-            // 1. Run the debug step. It reads from A, writes to B.
-            results = await this.currentErosionModel.captureSingleStep(erosionParams, {
-                read: this.currentModel.heightmapTextureA,
-                write: this.currentModel.heightmapTextureB
-            });
+        // 2. Read back the final terrain and water state from the GPU. This must be done
+        //    before we swap the textures for the next iteration.
+        const { heights, waterHeights } = await this.currentModel.readbackFinalErosionState(this.currentErosionModel);
 
-            // 2. The new terrain is in heightmapTextureB. Swap the model's textures so 'A' is now the source for the next step.
-            this.currentModel.swapTerrainTextures();
+        // 3. Process the captured data, update the plot, and log it.
+        this._processAndLogCapture(captureResults.capturedData);
 
-            // 3. Update the view's flow map textures for potential heatmap rendering.
-            // The new terrain is now in A, and the other flow maps were swapped inside captureSingleStep.
-            this.view.updateFlowMapTextures(
-                this.currentErosionModel.waterTextureA,
-                this.currentErosionModel.velocityTextureA,
-                this.currentModel.heightmapTextureA, // Pass the new, correct terrain texture
-                this.currentErosionModel.sedimentTextureA
-            );
+        // 4. Swap the primary terrain textures to prepare for the next step.
+        this.currentModel.swapTerrainTextures();
 
-            // 4. Add the detailed analysis data to our capture buffer.
-            const newFrame = {
-                frame: this.totalErosionIterations,
-                data: results.capturedData
-            };
-            this.simulationCapture.addFrame(newFrame.frame, newFrame.data);
+        // 5. Update the view with the new textures for heatmap rendering.
+        this._updateViewWithNewState();
 
-            // 5. Update the plot with the latest data
-            if (this.simulationCapture.frameCount === 1) {
-                // If this is the first frame, populate the dropdown
-                this.uiController.populatePlotMetrics(this.simulationCapture.debugCaptureData);
-            } else if (this.plotMetrics.length > 0) {
-                // Send only the new frame for an efficient update.
-                this.postMessageToPlotter('UPDATE', { newFrame });
-            }
-        } else {
-            // --- STANDARD PATH ---
-            // `runErosion` is self-contained. It runs 1 iteration and copies the result back to heightmapTextureA.
-            // No swap is needed.
-            results = await this.currentModel.runErosion(1, erosionParams, this.currentErosionModel);
-        }
+        // 6. Calculate and return the final metrics for this step.
+        const metrics = this.currentModel.calculateErosionMetrics(heights);
+        return { heights, waterHeights, ...metrics };
+    }
 
-        // Unify the return value by always calculating metrics from the resulting heightmap.
-        const metrics = this.currentModel.calculateErosionMetrics(results.heights);
-        return { ...results, ...metrics }; // Combine results with metrics and return
+    async _executeAndCaptureDebugStep(erosionParams) {
+        return await this.currentErosionModel.captureSingleStep(erosionParams, {
+            read: this.currentModel.heightmapTextureA,
+            write: this.currentModel.heightmapTextureB
+        });
+    }
+
+    _processAndLogCapture(capturedData) {
+        const frameIndex = this.totalErosionIterations;
+        this.simulationCapture.addFrame(frameIndex, capturedData);
+        this.uiController.populatePlotMetrics(this.simulationCapture.debugCaptureData); // Repopulate on first frame
+        this.postMessageToPlotter('UPDATE', { newFrame: { frame: frameIndex, data: capturedData } });
+    }
+
+    _updateViewWithNewState() {
+        // The textures have been swapped, so 'A' now points to the latest data.
+        // This must be done AFTER the swap so the view gets the correct textures for heatmap rendering.
+        this.view.updateFlowMapTextures(
+            this.currentErosionModel.waterTextureA,
+            this.currentErosionModel.velocityTextureA,
+            this.currentModel.heightmapTextureA, // This is now the new terrain
+            this.currentErosionModel.sedimentTextureA
+        );
     }
 
     changePlotMetric(metrics) {

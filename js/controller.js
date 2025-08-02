@@ -84,6 +84,7 @@ class Controller {
             onParamsChanged: () => this.simulationController.wantsUpdate = true,
             onPlotMetricChange: (metrics) => this.simulationController.changePlotMetric(metrics),
             onShowPlotWindow: () => this.simulationController.showPlotWindow(),
+            onCaptureDirectorySelected: (directory) => this.simulationController.setCaptureDirectory(directory),
         };
         this.uiController = new UIController(uiCallbacks, config);
 

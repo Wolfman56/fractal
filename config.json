@@ -20,10 +20,10 @@
   "erosion": {
     "model": "hydraulic",
     "iterations": 200,
-    "wetness": 0.1,
-    "solubility": 0.01,
-    "deposition": 0.5,
-    "capacity": 0.1,
+    "wetness": 0.5,
+    "solubility": 0.1,
+    "deposition": 0.2,
+    "capacity": 0.5,
     "seaLevel": 0.15,
     "density": 9.8
   },

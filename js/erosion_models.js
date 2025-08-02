@@ -1,4 +1,4 @@
-import { getPaddedByteRange, padBuffer } from './utils.js';
+import { getPaddedByteRange, padBuffer, withTimeout } from './utils.js';
 
 /**
  * Base class for all erosion simulation models.
@@ -102,7 +102,6 @@ export class HydraulicErosionModel extends ErosionModel {
         this.resetState();
 
         // --- Pre-create Bind Groups for Performance ---
-        // By creating all bind group variations upfront, we avoid object creation in the hot loop.
         const createBindGroup = (layout, bindings) => this.device.createBindGroup({ layout, entries: bindings });
         const t = (binding, texture) => ({ binding, resource: texture.createView() });
         const b = (binding, buffer) => ({ binding, resource: { buffer } });
@@ -118,13 +117,12 @@ export class HydraulicErosionModel extends ErosionModel {
         };
 
         // Set B: Corresponds to an odd-numbered iteration (i % 2 === 1)
-        // Note the swapped texture bindings (A vs B) compared to Set A.
         const bg_B = {
             water:      createBindGroup(this.pipelines.water.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, this.waterTextureB), t(6, this.waterTextureA) ]),
             flow:       createBindGroup(this.pipelines.flow.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, this.terrainTextureB), t(2, this.waterTextureA), t(4, this.velocityTextureB), t(8, this.velocityTextureA) ]),
-            erosion:    createBindGroup(this.pipelines.erosion.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, this.terrainTextureB), t(2, this.waterTextureA), t(3, this.sedimentTextureA), t(4, this.velocityTextureA), t(5, this.terrainTextureA), t(7, this.sedimentTextureB) ]),
-            transport:  createBindGroup(this.pipelines.transport.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, this.waterTextureA), t(3, this.sedimentTextureB), t(4, this.velocityTextureA), t(6, this.waterTextureB), t(7, this.sedimentTextureA) ]),
-            deposition: createBindGroup(this.pipelines.deposition.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, this.terrainTextureA), t(2, this.waterTextureB), t(3, this.sedimentTextureA), t(4, this.velocityTextureA), t(5, this.terrainTextureB), t(7, this.sedimentTextureB) ]),
+            erosion:    createBindGroup(this.pipelines.erosion.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, this.terrainTextureB), t(2, this.waterTextureA), t(3, this.sedimentTextureB), t(4, this.velocityTextureA), t(5, this.terrainTextureA), t(7, this.sedimentTextureA) ]),
+            transport:  createBindGroup(this.pipelines.transport.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, this.waterTextureA), t(3, this.sedimentTextureA), t(4, this.velocityTextureA), t(6, this.waterTextureB), t(7, this.sedimentTextureB) ]),
+            deposition: createBindGroup(this.pipelines.deposition.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, this.terrainTextureA), t(2, this.waterTextureB), t(3, this.sedimentTextureB), t(4, this.velocityTextureA), t(5, this.terrainTextureB), t(7, this.sedimentTextureA) ]),
             evaporation:createBindGroup(this.pipelines.evaporation.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, this.waterTextureB), t(6, this.waterTextureA) ]),
         };
 
@@ -134,17 +132,12 @@ export class HydraulicErosionModel extends ErosionModel {
         };
     }
 
-    getFinalTerrainTexture(iterations) {
-        return (iterations % 2 === 0) ? this.terrainTextureA : this.terrainTextureB;
-    }
-
     resetState() {
         if (!this.waterTextureA) return; // Don't run if resources aren't created yet
 
         const queue = this.device.queue;
         const textureSize = { width: this.gridSize, height: this.gridSize };
 
-        // Create and write a zero-buffer for the single-channel (r32float) textures
         const zeroDataR32F = new Float32Array(this.gridSize * this.gridSize);
         const { paddedBuffer: paddedR32F, bytesPerRow: bytesPerRowR32F } = padBuffer(zeroDataR32F, this.gridSize, this.gridSize);
         queue.writeTexture({ texture: this.waterTextureA }, paddedR32F, { bytesPerRow: bytesPerRowR32F }, textureSize);
@@ -152,24 +145,18 @@ export class HydraulicErosionModel extends ErosionModel {
         queue.writeTexture({ texture: this.sedimentTextureA }, paddedR32F, { bytesPerRow: bytesPerRowR32F }, textureSize);
         queue.writeTexture({ texture: this.sedimentTextureB }, paddedR32F, { bytesPerRow: bytesPerRowR32F }, textureSize);
 
-        // Create and write a zero-buffer for the four-channel (rgba32float) velocity textures
         const zeroDataRGBA32F = new Float32Array(this.gridSize * this.gridSize * 4);
-        const { paddedBuffer: paddedRGBA32F, bytesPerRow: bytesPerRowRGBA32F } = padBuffer(zeroDataRGBA32F, this.gridSize, this.gridSize, 16); // Override bytesPerPixel for rgba32float
+        const { paddedBuffer: paddedRGBA32F, bytesPerRow: bytesPerRowRGBA32F } = padBuffer(zeroDataRGBA32F, this.gridSize, this.gridSize, 16);
         queue.writeTexture({ texture: this.velocityTextureA }, paddedRGBA32F, { bytesPerRow: bytesPerRowRGBA32F }, textureSize);
         queue.writeTexture({ texture: this.velocityTextureB }, paddedRGBA32F, { bytesPerRow: bytesPerRowRGBA32F }, textureSize);
         console.log("Hydraulic erosion state (water, sediment, velocity) has been reset.");
     }
 
     _prepareUniforms(params) {
-        // Buffer now holds 13 floats (52 bytes)
         const uniformData = new Float32Array(13);
         const uniformDataU32 = new Uint32Array(uniformData.buffer);
-
-        // --- Simulation Tuning Parameters ---
         uniformData[0] = params.dt;
-        uniformData[1] = params.density; // density (as gravity)
-
-        // --- UI-Controlled Parameters ---
+        uniformData[1] = params.density;
         uniformData[2] = params.evapRate;
         uniformData[3] = params.depositionRate;
         uniformData[4] = params.solubility;
@@ -181,212 +168,199 @@ export class HydraulicErosionModel extends ErosionModel {
         uniformData[10] = params.heightMultiplier;
         uniformData[11] = params.velocityDamping;
         uniformData[12] = params.cellSize;
-        this.device.queue.writeBuffer(this.uniformsBuffer, 0, uniformData);
+        return uniformData;
+    }
+
+    _runPass(encoder, passName, bindGroup, workgroupCount) {
+        const pass = encoder.beginComputePass({ label: `${passName} Pass` });
+        pass.setPipeline(this.pipelines[passName.toLowerCase()]);
+        pass.setBindGroup(0, bindGroup);
+        pass.dispatchWorkgroups(workgroupCount, workgroupCount);
+        pass.end();
     }
 
     run(encoder, iterations, params) {
-        this._prepareUniforms(params);
+        this.device.queue.writeBuffer(this.uniformsBuffer, 0, this._prepareUniforms(params));
 
-        // This loop runs the full 5-pass simulation for each iteration.
-        // If params.addRain is true, water will be added in every single iteration.
         for (let i = 0; i < iterations; i++) {
             const workgroupCount = Math.ceil(this.gridSize / 16);
             const bindGroupSet = (i % 2 === 0) ? this.bindGroups.even : this.bindGroups.odd;
-            const [waterRead, waterWrite] = (i % 2 === 0) ?
-                [this.waterTextureA, this.waterTextureB] :
-                [this.waterTextureB, this.waterTextureA];
 
-            // 1. Water increment - Adds water if the 'addRain' flag is set.
             if (params.addRain) {
-                let pass1 = encoder.beginComputePass({ label: "Water Increment Pass" });
-                pass1.setPipeline(this.pipelines.water);
-                pass1.setBindGroup(0, bindGroupSet.water);
-                pass1.dispatchWorkgroups(workgroupCount, workgroupCount);
-                pass1.end();
+                this._runPass(encoder, 'water', bindGroupSet.water, workgroupCount);
             } else {
-                // If not raining, just copy the water state over to preserve it for the flow pass.
-                encoder.copyTextureToTexture(
-                    { texture: waterRead },
-                    { texture: waterWrite },
-                    { width: this.gridSize, height: this.gridSize }
-                );
+                const [waterRead, waterWrite] = (i % 2 === 0) ? [this.waterTextureA, this.waterTextureB] : [this.waterTextureB, this.waterTextureA];
+                encoder.copyTextureToTexture({ texture: waterRead }, { texture: waterWrite }, { width: this.gridSize, height: this.gridSize });
             }
 
-            // 2. Flow simulation
-            let pass2 = encoder.beginComputePass({ label: "Flow Pass" });
-            pass2.setPipeline(this.pipelines.flow);
-            pass2.setBindGroup(0, bindGroupSet.flow);
-            pass2.dispatchWorkgroups(workgroupCount, workgroupCount);
-            pass2.end();
-
-            // 3. Erosion and deposition
-            let pass3 = encoder.beginComputePass({ label: "Erosion Pass" });
-            pass3.setPipeline(this.pipelines.erosion);
-            pass3.setBindGroup(0, bindGroupSet.erosion);
-            pass3.dispatchWorkgroups(workgroupCount, workgroupCount);
-            pass3.end();
-
-            // 4. Sediment Transport: Moves water and suspended sediment to neighboring cells.
-            let pass4 = encoder.beginComputePass({ label: "Transport Pass" });
-            pass4.setPipeline(this.pipelines.transport);
-            pass4.setBindGroup(0, bindGroupSet.transport);
-            pass4.dispatchWorkgroups(workgroupCount, workgroupCount);
-            pass4.end();
-
-            // 5. Deposition: Deposits sediment from the now-transported water onto the terrain.
-            let pass_depo = encoder.beginComputePass({ label: "Deposition Pass" });
-            pass_depo.setPipeline(this.pipelines.deposition);
-            pass_depo.setBindGroup(0, bindGroupSet.deposition);
-            pass_depo.dispatchWorkgroups(workgroupCount, workgroupCount);
-            pass_depo.end();
-
-
-            // 6. Evaporation
-            let pass5 = encoder.beginComputePass({ label: "Evaporation Pass" });
-            pass5.setPipeline(this.pipelines.evaporation);
-            pass5.setBindGroup(0, bindGroupSet.evaporation);
-            pass5.dispatchWorkgroups(workgroupCount, workgroupCount);
-            pass5.end();
+            ['flow', 'erosion', 'transport', 'deposition', 'evaporation'].forEach(passName => {
+                this._runPass(encoder, passName, bindGroupSet[passName], workgroupCount);
+            });
         }
     }
 }
 
 export class HydraulicErosionModelDebug extends HydraulicErosionModel {
-    /**
-     * Runs a single iteration of the erosion model and captures intermediate
-     * results for debugging. This is an expensive operation.
-     * @param {object} params The erosion parameters from the UI.
-     * @param {object} terrainTextures An object with { read, write } textures for the terrain heightmap.
-     * @returns {Promise<{capturedData: object, heights: Float32Array}>}
-     */
-    async captureSingleStep(params, terrainTextures) {
-        const { gridSize } = this;
-        const { bytesPerRow: r32fBytesPerRow, bufferSize: r32fBufferSize } = getPaddedByteRange(gridSize, gridSize, 4);
-        const { bytesPerRow: rgba32fBytesPerRow, bufferSize: rgba32fBufferSize } = getPaddedByteRange(gridSize, gridSize, 16);
+    constructor(device) {
+        super(device);
+        this.isStateA = true;
+        this.texturesA = null;
+        this.texturesB = null;
+    }
 
-        // Create staging buffers for all intermediate textures
-        const stagingBuffers = {
-            water: this.device.createBuffer({ size: r32fBufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
-            velocity: this.device.createBuffer({ size: rgba32fBufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
-            sedimentErosion: this.device.createBuffer({ size: r32fBufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
-            terrainErosion: this.device.createBuffer({ size: r32fBufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
-            waterTransport: this.device.createBuffer({ size: r32fBufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
-            sedimentTransport: this.device.createBuffer({ size: r32fBufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
-            terrainDeposition: this.device.createBuffer({ size: r32fBufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
-            sedimentDeposition: this.device.createBuffer({ size: r32fBufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
-            waterEvaporationPass6: this.device.createBuffer({ size: r32fBufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
-            finalTerrain: this.device.createBuffer({ size: r32fBufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
+    recreateResources(gridSize) {
+        super.recreateResources(gridSize); // This calls resetState()
+        this.isStateA = true;
+        this.texturesA = {
+            water: this.waterTextureA, sediment: this.sedimentTextureA, velocity: this.velocityTextureA
         };
+        this.texturesB = {
+            water: this.waterTextureB, sediment: this.sedimentTextureB, velocity: this.velocityTextureB
+        };
+    }
 
+    async capturePassData(encoder, texture, name) {
+        const format = texture.format;
+        const bytesPerPixel = format.includes('rgba') ? 16 : 4;
+        const { bytesPerRow, bufferSize } = getPaddedByteRange(this.gridSize, this.gridSize, bytesPerPixel);
+        const stagingBuffer = this.device.createBuffer({ size: bufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+        
+        encoder.copyTextureToBuffer({ texture }, { buffer: stagingBuffer, bytesPerRow }, { width: this.gridSize, height: this.gridSize });
+        
+        return {
+            buffer: stagingBuffer,
+            name: name,
+            analyze: () => {
+                const mappedRange = stagingBuffer.getMappedRange();
+                const data = new Float32Array(mappedRange);
+                let sum = 0.0, min = Infinity, max = -Infinity;
+                 for (let i = 0; i < data.length; i++) {
+                     const v = data[i];
+                     sum += v;
+                     if (v < min) min = v;
+                     if (v > max) max = v;
+                 }
+                const avg = sum / data.length;
+                const result = {};
+                result[name] = { sum, min, max, avg };
+                return result;
+            }
+        };
+    }
+
+    async captureSingleStep(params, externalTerrainTextures) {
         const encoder = this.device.createCommandEncoder({ label: "Erosion Capture Encoder" });
+        this.device.queue.writeBuffer(this.uniformsBuffer, 0, this._prepareUniforms(params));
 
-        // This is a single iteration of the main run() loop, with copy commands inserted.
-        this._prepareUniforms(params);
-        const resources = {
-            terrain: terrainTextures,
-            water: { read: this.waterTextureA, write: this.waterTextureB },
-            sediment: { read: this.sedimentTextureA, write: this.sedimentTextureB },
-            velocity: { read: this.velocityTextureA, write: this.velocityTextureB },
-        };
+        const readSet = this.isStateA ? this.texturesA : this.texturesB;
+        const writeSet = this.isStateA ? this.texturesB : this.texturesA;
+        const terrainRead = this.isStateA ? externalTerrainTextures.read : externalTerrainTextures.write;
+        const terrainWrite = this.isStateA ? externalTerrainTextures.write : externalTerrainTextures.read;
 
-        const createBindGroup = (layout, bindings) => this.device.createBindGroup({ layout, entries: bindings });
-        const t = (binding, texture) => ({ binding, resource: texture.createView() });
-        const b = (binding, buffer) => ({ binding, resource: { buffer } });
-        const workgroupCount = Math.ceil(this.gridSize / 16);
+        const captureTasks = [];
 
-        // The 5 passes of the simulation
-				// Pass 1: Water Increment
-        if (params.addRain) {
-            const pass1 = encoder.beginComputePass({ label: "Water Increment Pass" });
-            pass1.setPipeline(this.pipelines.water);
-            pass1.setBindGroup(0, createBindGroup(this.pipelines.water.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, resources.water.read), t(6, resources.water.write) ]));
-            pass1.dispatchWorkgroups(workgroupCount, workgroupCount);
-            pass1.end();
-        } else {
-            // If not raining, copy the current water state to the next buffer so the flow pass has the correct input.
-            encoder.copyTextureToTexture(
-                { texture: resources.water.read },
-                { texture: resources.water.write },
-                { width: gridSize, height: gridSize }
-            );
-        }
-        encoder.copyTextureToBuffer({ texture: resources.water.write }, { buffer: stagingBuffers.water, bytesPerRow: r32fBytesPerRow }, { width: gridSize, height: gridSize });
+        this.runWater(encoder, params, readSet.water, writeSet.water);
+        captureTasks.push(await this.capturePassData(encoder, writeSet.water, 'pass1_water'));
 
-        // Pass 2: Flow Simulation
-        const pass2 = encoder.beginComputePass(); pass2.setPipeline(this.pipelines.flow); pass2.setBindGroup(0, createBindGroup(this.pipelines.flow.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, resources.terrain.read), t(2, resources.water.write), t(4, resources.velocity.read), t(8, resources.velocity.write) ])); pass2.dispatchWorkgroups(workgroupCount, workgroupCount); pass2.end();
-        encoder.copyTextureToBuffer({ texture: resources.velocity.write }, { buffer: stagingBuffers.velocity, bytesPerRow: rgba32fBytesPerRow }, { width: gridSize, height: gridSize });
+        this.runFlow(encoder, params, writeSet.water, terrainRead, readSet.velocity, writeSet.velocity);
+        captureTasks.push(await this.capturePassData(encoder, writeSet.velocity, 'pass2_velocity'));
 
-        // Pass 3: Erosion and Deposition
-        const pass3 = encoder.beginComputePass(); pass3.setPipeline(this.pipelines.erosion); pass3.setBindGroup(0, createBindGroup(this.pipelines.erosion.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, resources.terrain.read), t(2, resources.water.write), t(3, resources.sediment.read), t(4, resources.velocity.write), t(5, resources.terrain.write), t(7, resources.sediment.write) ])); pass3.dispatchWorkgroups(workgroupCount, workgroupCount); pass3.end();
-        encoder.copyTextureToBuffer({ texture: resources.terrain.write }, { buffer: stagingBuffers.terrainErosion, bytesPerRow: r32fBytesPerRow }, { width: gridSize, height: gridSize });
-        encoder.copyTextureToBuffer({ texture: resources.sediment.write }, { buffer: stagingBuffers.sedimentErosion, bytesPerRow: r32fBytesPerRow }, { width: gridSize, height: gridSize });
+        this.runErosion(encoder, params, terrainRead, writeSet.water, readSet.sediment, writeSet.velocity, terrainWrite, writeSet.sediment);
+        captureTasks.push(await this.capturePassData(encoder, terrainWrite, 'pass3_terrain'));
+        captureTasks.push(await this.capturePassData(encoder, writeSet.sediment, 'pass3_sediment'));
 
-        // Pass 4: Sediment Transport
-        const pass4 = encoder.beginComputePass(); pass4.setPipeline(this.pipelines.transport); pass4.setBindGroup(0, createBindGroup(this.pipelines.transport.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, resources.water.write), t(3, resources.sediment.write), t(4, resources.velocity.write), t(6, resources.water.read), t(7, resources.sediment.read) ])); pass4.dispatchWorkgroups(workgroupCount, workgroupCount); pass4.end();
-        encoder.copyTextureToBuffer({ texture: resources.water.read }, { buffer: stagingBuffers.waterTransport, bytesPerRow: r32fBytesPerRow }, { width: gridSize, height: gridSize });
-        encoder.copyTextureToBuffer({ texture: resources.sediment.read }, { buffer: stagingBuffers.sedimentTransport, bytesPerRow: r32fBytesPerRow }, { width: gridSize, height: gridSize });
+        this.runTransport(encoder, params, writeSet.water, writeSet.sediment, writeSet.velocity, readSet.water, readSet.sediment);
+        captureTasks.push(await this.capturePassData(encoder, readSet.water, 'pass4_water'));
+        captureTasks.push(await this.capturePassData(encoder, readSet.sediment, 'pass4_sediment'));
 
-        // Pass 5: Deposition
-        const pass_depo = encoder.beginComputePass(); pass_depo.setPipeline(this.pipelines.deposition); pass_depo.setBindGroup(0, createBindGroup(this.pipelines.deposition.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(1, resources.terrain.write), t(2, resources.water.read), t(3, resources.sediment.read), t(4, resources.velocity.write), t(5, resources.terrain.read), t(7, resources.sediment.write) ])); pass_depo.dispatchWorkgroups(workgroupCount, workgroupCount); pass_depo.end();
-        encoder.copyTextureToBuffer({ texture: resources.terrain.read }, { buffer: stagingBuffers.terrainDeposition, bytesPerRow: r32fBytesPerRow }, { width: gridSize, height: gridSize });
-        encoder.copyTextureToBuffer({ texture: resources.sediment.write }, { buffer: stagingBuffers.sedimentDeposition, bytesPerRow: r32fBytesPerRow }, { width: gridSize, height: gridSize });
+        this.runDeposition(encoder, params, terrainWrite, readSet.water, readSet.sediment, writeSet.velocity, terrainRead, writeSet.sediment);
+        captureTasks.push(await this.capturePassData(encoder, terrainRead, 'pass5_terrain'));
+        captureTasks.push(await this.capturePassData(encoder, writeSet.sediment, 'pass5_sediment'));
 
-        // Pass 6: Evaporation
-        const pass6 = encoder.beginComputePass(); pass6.setPipeline(this.pipelines.evaporation); pass6.setBindGroup(0, createBindGroup(this.pipelines.evaporation.getBindGroupLayout(0), [ b(0, this.uniformsBuffer), t(2, resources.water.read), t(6, resources.water.write) ])); pass6.dispatchWorkgroups(workgroupCount, workgroupCount); pass6.end();
-        encoder.copyTextureToBuffer({ texture: resources.water.write }, { buffer: stagingBuffers.waterEvaporationPass6, bytesPerRow: r32fBytesPerRow }, { width: gridSize, height: gridSize });
-
-        // The final terrain is in the "read" texture after the deposition pass. Copy it to the
-        // "write" texture so that the final state is consistently in the 'B' textures before the swap.
-        encoder.copyTextureToTexture({ texture: resources.terrain.read }, { texture: resources.terrain.write }, { width: gridSize, height: gridSize });
-
-        // Now copy the final terrain state to the staging buffer for CPU readback.
-        encoder.copyTextureToBuffer({ texture: resources.terrain.write }, { buffer: stagingBuffers.finalTerrain, bytesPerRow: r32fBytesPerRow }, { width: gridSize, height: gridSize });
+        this.runEvaporation(encoder, params, readSet.water, writeSet.water);
+        captureTasks.push(await this.capturePassData(encoder, writeSet.water, 'pass6_water'));
 
         this.device.queue.submit([encoder.finish()]);
         await this.device.queue.onSubmittedWorkDone();
 
-        await Promise.all(Object.values(stagingBuffers).map(b => b.mapAsync(GPUMapMode.READ).catch(e => console.error("Buffer mapping failed", e))));
+        await Promise.all(captureTasks.map(task => task.buffer.mapAsync(GPUMapMode.READ)));
 
-        // Get all mapped ranges once to avoid "getMappedRange overlaps" errors.
-        const mappedRanges = {};
-        for (const key in stagingBuffers) {
-            mappedRanges[key] = stagingBuffers[key].getMappedRange();
+        const capturedData = {};
+        for (const task of captureTasks) {
+            Object.assign(capturedData, task.analyze());
+            task.buffer.unmap();
+            task.buffer.destroy();
         }
 
-        const analyzeBuffer = (range) => {
-            if (!range || range.byteLength === 0) return { sum: 'N/A', min: 'N/A', max: 'N/A', avg: 'N/A', nonZero: 'N/A' };
-            const data = new Float32Array(range);
-            const dataLength = data.length;
-            let sum = 0, min = Infinity, max = -Infinity, nonZeroCount = 0;
-            for (const v of data) { sum += v; if (v < min) min = v; if (v > max) max = v; if (Math.abs(v) > 1e-9) nonZeroCount++; }
-            return { sum: sum.toFixed(4), min: min.toFixed(4), max: max.toFixed(4), avg: (sum / dataLength).toFixed(4), nonZero: `${nonZeroCount} / ${dataLength}` };
-        };
+        this.isStateA = !this.isStateA;
 
-        const capturedData = {
-            pass1_water: analyzeBuffer(mappedRanges.water),
-            pass2_velocity: analyzeBuffer(mappedRanges.velocity),
-            pass3_terrain: analyzeBuffer(mappedRanges.terrainErosion),
-            pass3_sediment: analyzeBuffer(mappedRanges.sedimentErosion),
-            pass4_water: analyzeBuffer(mappedRanges.waterTransport),
-            pass4_sediment: analyzeBuffer(mappedRanges.sedimentTransport),
-            pass5_terrain: analyzeBuffer(mappedRanges.terrainDeposition),
-            pass5_sediment: analyzeBuffer(mappedRanges.sedimentDeposition),
-            pass6_water: analyzeBuffer(mappedRanges.waterEvaporationPass6),
-        };
+        return { capturedData, heights: null, waterHeights: null };
+    }
 
-        const finalHeights = new Float32Array(mappedRanges.finalTerrain).slice();
-        const finalWater = new Float32Array(mappedRanges.waterEvaporationPass6).slice();
+    _runPass(encoder, passName, entries) {
+        const pass = encoder.beginComputePass({ label: `${passName} Pass` });
+        const pipeline = this.pipelines[passName.toLowerCase()];
+        pass.setPipeline(pipeline);
+        pass.setBindGroup(0, this.device.createBindGroup({
+            layout: pipeline.getBindGroupLayout(0),
+            entries: [
+                { binding: 0, resource: { buffer: this.uniformsBuffer } },
+                ...entries
+            ]
+        }));
+        pass.dispatchWorkgroups(Math.ceil(this.gridSize / 16), Math.ceil(this.gridSize / 16));
+        pass.end();
+    }
 
-        Object.values(stagingBuffers).forEach(b => b.unmap());
-        Object.values(stagingBuffers).forEach(b => b.destroy());
+    runWater(encoder, params, waterIn, waterOut) {
+        if (params.addRain) {
+            this._runPass(encoder, 'Water', [
+                { binding: 2, resource: waterIn.createView() },
+                { binding: 6, resource: waterOut.createView() },
+            ]);
+        } else {
+            encoder.copyTextureToTexture({ texture: waterIn }, { texture: waterOut }, { width: this.gridSize, height: this.gridSize });
+        }
+    }
 
-        // After running the debug step, we need to swap the main state textures
-        // so the *next* frame starts from the correct state.
-        [this.waterTextureA, this.waterTextureB] = [this.waterTextureB, this.waterTextureA];
-        [this.sedimentTextureA, this.sedimentTextureB] = [this.sedimentTextureB, this.sedimentTextureA];
-        [this.velocityTextureA, this.velocityTextureB] = [this.velocityTextureB, this.velocityTextureA];
+    runFlow(encoder, params, waterIn, terrainIn, velocityIn, velocityOut) {
+        this._runPass(encoder, 'Flow', [
+            { binding: 1, resource: terrainIn.createView() },
+            { binding: 2, resource: waterIn.createView() },
+            { binding: 4, resource: velocityIn.createView() },
+            { binding: 8, resource: velocityOut.createView() },
+        ]);
+    }
 
-        return { capturedData, heights: finalHeights, waterHeights: finalWater };
+    runErosion(encoder, params, terrainIn, waterIn, sedimentIn, velocityIn, terrainOut, sedimentOut) {
+        this._runPass(encoder, 'Erosion', [
+            { binding: 1, resource: terrainIn.createView() }, { binding: 2, resource: waterIn.createView() },
+            { binding: 3, resource: sedimentIn.createView() }, { binding: 4, resource: velocityIn.createView() },
+            { binding: 5, resource: terrainOut.createView() }, { binding: 7, resource: sedimentOut.createView() },
+        ]);
+    }
+
+    runTransport(encoder, params, waterIn, sedimentIn, velocityIn, waterOut, sedimentOut) {
+        this._runPass(encoder, 'Transport', [
+            { binding: 2, resource: waterIn.createView() }, { binding: 3, resource: sedimentIn.createView() },
+            { binding: 4, resource: velocityIn.createView() }, { binding: 6, resource: waterOut.createView() },
+            { binding: 7, resource: sedimentOut.createView() },
+        ]);
+    }
+
+    runDeposition(encoder, params, terrainIn, waterIn, sedimentIn, velocityIn, terrainOut, sedimentOut) {
+        this._runPass(encoder, 'Deposition', [
+            { binding: 1, resource: terrainIn.createView() }, { binding: 2, resource: waterIn.createView() },
+            { binding: 3, resource: sedimentIn.createView() }, { binding: 4, resource: velocityIn.createView() },
+            { binding: 5, resource: terrainOut.createView() }, { binding: 7, resource: sedimentOut.createView() },
+        ]);
+    }
+
+    runEvaporation(encoder, params, waterIn, waterOut) {
+        this._runPass(encoder, 'Evaporation', [
+            { binding: 2, resource: waterIn.createView() },
+            { binding: 6, resource: waterOut.createView() },
+        ]);
     }
 }
 
@@ -412,18 +386,14 @@ export class SimpleErosionModel extends ErosionModel {
         super.recreateResources(gridSize);
         this.uniformsBuffer?.destroy();
         this.uniformsBuffer = this.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-        // Invalidate cached bind groups since resources have changed
         this.bindGroupAtoB = null;
         this.bindGroupBtoA = null;
     }
 
     run(encoder, iterations, params, terrainTextures) {
-        // This model ignores most parameters, but we can scale one to fit.
-        // We map the "Deposition" slider (0.01-1.0) to a reasonable thermal erosion rate (0.001-0.1).
         const erosionRate = params.depositionRate * 0.1;
         this.device.queue.writeBuffer(this.uniformsBuffer, 0, new Float32Array([erosionRate]));
 
-        // Lazy-initialize and cache bind groups
         if (!this.bindGroupAtoB) {
             const bindGroupLayout = this.pipeline.getBindGroupLayout(0);
             this.bindGroupAtoB = this.device.createBindGroup({ layout: bindGroupLayout, entries: [ { binding: 0, resource: terrainTextures.read.createView() }, { binding: 1, resource: terrainTextures.write.createView() }, { binding: 2, resource: { buffer: this.uniformsBuffer } } ] });
@@ -433,11 +403,9 @@ export class SimpleErosionModel extends ErosionModel {
         for (let i = 0; i < iterations; i++) {
             const pass = encoder.beginComputePass({ label: `Simple Erosion Pass ${i}` });
             pass.setPipeline(this.pipeline);
-            // Use the cached bind groups
             pass.setBindGroup(0, (i % 2 === 0) ? this.bindGroupAtoB : this.bindGroupBtoA);
             pass.dispatchWorkgroups(Math.ceil(this.gridSize / 16), Math.ceil(this.gridSize / 16));
             pass.end();
         }
     }
-
 }

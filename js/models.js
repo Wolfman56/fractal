@@ -223,56 +223,48 @@ export class BaseModel {
             { width: erosionGridSize, height: erosionGridSize }
         );
 
-        // 4. Read back the heightmap and water map for display.
-        const finalWaterTexture = (iterations % 2 !== 0) ? erosionModel.waterTextureB : erosionModel.waterTextureA;
-        const waterStagingBuffer = this.device.createBuffer({ size: bufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-        encoder.copyTextureToBuffer({ texture: this.heightmapTextureA }, { buffer: this.computeStagingBuffer, bytesPerRow }, { width: this.gridSize, height: this.gridSize });
-        if (finalWaterTexture) {
-            encoder.copyTextureToBuffer({ texture: finalWaterTexture }, { buffer: waterStagingBuffer, bytesPerRow }, { width: erosionGridSize, height: erosionGridSize });
-        }
-
+        // 4. Submit the GPU commands and then read back the final state.
         this.device.queue.submit([encoder.finish()]);
 
-        const mapPromises = [withTimeout(this.computeStagingBuffer.mapAsync(GPUMapMode.READ), 10000, "Eroded Heightmap Staging Buffer")];
-        if (finalWaterTexture) {
-            mapPromises.push(withTimeout(waterStagingBuffer.mapAsync(GPUMapMode.READ), 10000, "Water Staging Buffer"));
-        }
-        await Promise.all(mapPromises);
-
-        const erodedHeights = this._unpadBuffer(this.computeStagingBuffer.getMappedRange(), this.gridSize, this.gridSize, bytesPerRow);
-        this.computeStagingBuffer.unmap();
-
-        const waterHeights = this._unpadBuffer(finalWaterTexture ? waterStagingBuffer.getMappedRange() : null, erosionGridSize, erosionGridSize, bytesPerRow);
-        if (finalWaterTexture) waterStagingBuffer.unmap();
-        waterStagingBuffer.destroy();
+        const { heights: erodedHeights, waterHeights } = await this.readbackFinalErosionState(erosionModel);
 
         this.lastGeneratedHeightmap = erodedHeights;
 
         // After getting the new heights, calculate the total difference from the original
-        let totalErosion = 0;
-        let totalDeposition = 0;
-        if (this.originalHeightmap) {
-            const numPoints = erodedHeights.length;
-            for (let i = 0; i < numPoints; i++) {
-                const diff = erodedHeights[i] - this.originalHeightmap[i];
-                if (diff > 0) { // Material was added
-                    totalDeposition += diff;
-                } else { // Material was removed
-                    totalErosion -= diff; // diff is negative, so subtract to make it positive
-                }
-            }
-            // Convert the sums to an average difference per point for a more stable metric.
-            if (numPoints > 0) {
-                totalErosion /= numPoints;
-                totalDeposition /= numPoints;
-            }
-        }
+        const { erosionAmount, depositionAmount } = this.calculateErosionMetrics(erodedHeights);
 
-        return { heights: erodedHeights, waterHeights, erosionAmount: totalErosion, depositionAmount: totalDeposition };
+        return { heights: erodedHeights, waterHeights, erosionAmount, depositionAmount };
     }
 
     swapTerrainTextures() {
         [this.heightmapTextureA, this.heightmapTextureB] = [this.heightmapTextureB, this.heightmapTextureA];
+    }
+
+    async readbackFinalErosionState(erosionModel) {
+        const { bytesPerRow, bufferSize } = getPaddedByteRange(this.gridSize, this.gridSize, 4);
+        const heightStagingBuffer = this.device.createBuffer({ size: bufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+        const waterStagingBuffer = this.device.createBuffer({ size: bufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    
+        const encoder = this.device.createCommandEncoder();
+        // The 'A' textures are always the final source of truth after a simulation step/run.
+        encoder.copyTextureToBuffer({ texture: this.heightmapTextureA }, { buffer: heightStagingBuffer, bytesPerRow }, { width: this.gridSize, height: this.gridSize });
+        encoder.copyTextureToBuffer({ texture: erosionModel.waterTextureA }, { buffer: waterStagingBuffer, bytesPerRow }, { width: this.gridSize, height: this.gridSize });
+        this.device.queue.submit([encoder.finish()]);
+    
+        await Promise.all([
+            withTimeout(heightStagingBuffer.mapAsync(GPUMapMode.READ), 10000, "Final Height Readback"),
+            withTimeout(waterStagingBuffer.mapAsync(GPUMapMode.READ), 10000, "Final Water Readback")
+        ]);
+    
+        const heights = this._unpadBuffer(heightStagingBuffer.getMappedRange(), this.gridSize, this.gridSize, bytesPerRow);
+        heightStagingBuffer.unmap();
+        heightStagingBuffer.destroy();
+    
+        const waterHeights = this._unpadBuffer(waterStagingBuffer.getMappedRange(), this.gridSize, this.gridSize, bytesPerRow);
+        waterStagingBuffer.unmap();
+        waterStagingBuffer.destroy();
+    
+        return { heights, waterHeights };
     }
 
     calculateErosionMetrics(erodedHeights) {

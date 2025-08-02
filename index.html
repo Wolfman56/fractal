@@ -57,7 +57,7 @@
                         <span>Erosion Model</span>
                         <select id="erosion-model-select"></select>
                     </label>
-                    <label><span>Iterations</span><input type="range" id="erosion-iterations" min="1" max="100"><span id="erosion-iterations-value"></span></label>
+                    <label><span>Iterations</span><input type="range" id="erosion-iterations" min="1" max="500"><span id="erosion-iterations-value"></span></label>
                     <label><span>Wetness</span><input type="range" id="erosion-wetness" min="0.01" max="1.0" step="0.01"><span id="erosion-wetness-value"></span></label>
                     <label><span>Solubility</span><input type="range" id="erosion-solubility" min="0.01" max="1.0" step="0.01"><span id="erosion-solubility-value"></span></label>
                     <label><span>Deposition Rate</span><input type="range" id="erosion-deposition" min="0.01" max="1.0" step="0.01"><span id="erosion-deposition-value"></span></label>
@@ -79,6 +79,7 @@
                 <div class="control-group">
                     <label id="view-mode-label">
                         <span>View Mode</span>
+
                         <select id="debug-view-mode-select">
                             <option value="standard" selected>Standard</option>
                             <option value="water-depth">Water Depth</option>
@@ -89,14 +90,16 @@
                     <div id="erosion-debug-actions">
                         <button id="capture-toggle" title="Toggle capturing intermediate data on each erosion step.">Start Capture</button>
                         <div class="button-group">
+                            <button id="capture-directory-select" title="Select the save directory for captures.">Select Capture Directory</button>
                             <button id="save-capture" title="Saves the captured debug data to a JSON file.">Save Capture</button>
                             <button id="clear-capture" title="Clears all captured debug data.">Clear Capture</button>
                         </div>
                     </div>
                     <div class="stats-container">
+                        <label id="capture-directory-path" class="info-label">Current: Default Downloads</label>
                         <div class="stat-line"><span>Eroded</span><span id="stat-erosion">0.00</span></div>
                         <div class="stat-line"><span>Deposited</span><span id="stat-deposition">0.00</span></div>
-                        <div class="stat-line"><span>Iterations</span><span id="stat-iterations">0</span></div>
+                        <div class="stat-line"><span>Total Iterations</span><span id="stat-iterations">0</span></div>
                         <div class="stat-line"><span>Frames Captured</span><span id="stat-capture">0</span></div>
                     </div>
                     <hr>

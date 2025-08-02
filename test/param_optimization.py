@@ -35,11 +35,6 @@ def objective_function(**params):
     # 1. Initialize the CPU erosion model
     model = CPUErosionModel(GRID_SIZE)
     
-    # 2. Get the initial state
-    initial_avg_height = np.mean(model.state.h)
-    if initial_avg_height == 0: return 1e6 # Avoid division by zero on flat terrain
-
-    # 3. Set the simulation parameters for this run
     # We use a fixed set of base parameters and override them with the
     # values being tested by the optimizer.
     sim_params = {
@@ -52,7 +47,13 @@ def objective_function(**params):
         "velocityDamping": 0.99,
         **params # Optimizer parameters override defaults
     }
-    model.set_params(sim_params, add_rain=True)
+    model.set_params(sim_params, add_rain=True) # Set params before initializing terrain
+
+    # 2. Initialize the terrain with the correct heightMultiplier
+    model._initialize_terrain()
+    
+    # 3. Get the initial state
+    initial_avg_height = np.mean(model.state.h)
 
     # 4. Run the simulation
     for _ in range(NUM_ITERATIONS):

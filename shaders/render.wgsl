@@ -113,10 +113,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
     // --- Water Overlay ---
     // If the fragment is covered by dynamic water from the erosion sim, apply a transparent tint.
-    // We check against a very small threshold to make even shallow water visible.
-    if (input.water_depth > 1e-4) {
+    // We check against a very small threshold (0.1 micrometers) to make even the tiniest amount of water visible.
+    if (input.water_depth > 1e-7) {
         let water_tint = vec3<f32>(0.3, 0.5, 0.7); // A nice cyan tint
-        let water_opacity = smoothstep(0.0, 0.01, input.water_depth); // More opaque with depth, fully opaque at 1cm
+        let water_opacity = smoothstep(0.0, 0.001, input.water_depth); // More opaque with depth, ramp up to 1mm
         surface_color = mix(surface_color, water_tint, water_opacity * 0.6);
     }
 

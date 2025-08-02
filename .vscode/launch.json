@@ -11,7 +11,7 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "justMyCode": true,
-            "args": ["./test/sim_capture.json", "./test"]
+            "args": ["./test/sim_capture_hydraulic-debug.json", "./test"]
         }
     ]
 }

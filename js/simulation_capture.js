@@ -27,31 +27,49 @@ export default class SimulationCapture {
      * Saves the captured command history and frame-by-frame data to a JSON file.
      * The filename is determined by the configuration settings.
      */
-    save() {
+    async save(generationParams = null) {
         if (this.commandHistory.length === 0 && this.debugCaptureData.length === 0) {
             alert("No data to save.");
             return;
         }
 
         const baseFilename = this.config.baseFilename || 'sim_capture';
-        const overwrite = this.config.overwriteSave || false;
         const filename = `${baseFilename}.json`;
 
         const data = {
+            generationParams: generationParams,
             history: this.commandHistory,
             data: this.debugCaptureData,
         };
-        const jsonString = JSON.stringify(data, null, 2);
-        const blob = new Blob([jsonString], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = filename;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-        console.log(`Capture data saved to ${filename}`);
+
+        const dirHandle = this.config.outputDirectoryPath;
+
+        if (dirHandle && typeof dirHandle !== 'string') {
+            // We have a directory handle, use the new File System Access API
+            try {
+                const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
+                const writable = await fileHandle.createWritable();
+                await writable.write(JSON.stringify(data, null, 2));
+                await writable.close();
+                console.log(`Capture data saved to ${filename} in the selected directory.`);
+            } catch (e) {
+                console.error("Error saving capture data with File System Access API:", e);
+                alert("Could not save file to the selected directory. See console for details.");
+            }
+        } else {
+            // Fallback to the old download method
+            const jsonString = JSON.stringify(data, null, 2);
+            const blob = new Blob([jsonString], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+            console.log(`Capture data saved to default downloads folder: ${filename}`);
+        }
     }
 
     /**

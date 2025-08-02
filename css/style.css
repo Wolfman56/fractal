@@ -325,3 +325,8 @@ button.state-copied:hover {
     justify-content: space-between;
     align-items: center;
 }
+
+.info-label {
+    color: #aaa; /* Slightly dimmer than main text */
+    justify-content: flex-start; /* Align to the left */
+}

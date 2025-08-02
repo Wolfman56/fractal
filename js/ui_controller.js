@@ -11,6 +11,7 @@ export default class UIController {
         this.regenTimeout = null;
     }
 
+
     setupEventListeners() {
         // Main action buttons
         document.getElementById('regenerate')?.addEventListener('click', this.callbacks.onRegenerate);
@@ -53,6 +54,7 @@ export default class UIController {
         document.getElementById('show-plot-window')?.addEventListener('click', this.callbacks.onShowPlotWindow);
 
         // Sliders that trigger regeneration
+
         const regenSliderIds = ['gridSize', 'octaves', 'persistence', 'lacunarity', 'cycles', 'seed', 'heightMultiplier', 'hurst'];
         regenSliderIds.forEach(id => {
             const slider = document.getElementById(id);
@@ -69,6 +71,7 @@ export default class UIController {
         });
 
         // Sliders that do not trigger regeneration
+
         ['erosion-iterations', 'erosion-wetness', 'erosion-solubility', 'erosion-deposition', 'erosion-capacity', 'erosion-density', 'erosion-sea-level', 'verticalExaggeration'].forEach(id => {
             const slider = document.getElementById(id);
             if (slider) {
@@ -79,7 +82,18 @@ export default class UIController {
             }
         });
 
+        // Directory selector
+        document.getElementById('capture-directory-select')?.addEventListener('click', async () => {
+            try {
+                const directoryHandle = await window.showDirectoryPicker();
+                this.callbacks.onCaptureDirectorySelected(directoryHandle);
+            } catch (err) {
+                if (err.name !== 'AbortError') console.error("Error selecting directory:", err);
+            }
+        });
+
         // Apply initial state from config and set up initial UI state
+
         this.applyConfig();
     }
 
@@ -137,6 +151,7 @@ export default class UIController {
         
         // Set the initial color of the Erode button to match the rain mode.
         this.updateErodeButtonState(initialRainMode === 'rain');
+        this.updateCaptureDirectoryDisplay(null);
 
         // Set initial state for debug section visibility based on the configured erosion model
         this.toggleDebugSection(this.config.erosion.model);
@@ -189,6 +204,7 @@ export default class UIController {
         if (this.isPlotMetricContainerEmpty()) {
             // If the container is empty, clear any placeholder text before populating.
             container.innerHTML = '';
+
         }
 
         // Don't repopulate if it's already full of controls
@@ -346,5 +362,32 @@ export default class UIController {
             button.classList.remove('state-copied');
             button.disabled = false;
         }, 2000);
+    }
+
+    showSaveConfirmation() {
+        const button = document.getElementById('save-capture');
+        if (!button) return;
+
+        const originalText = button.textContent;
+        button.textContent = 'Saved!';
+        button.classList.add('state-copied'); // Re-use existing style for feedback
+        button.disabled = true;
+
+        setTimeout(() => {
+            button.textContent = originalText;
+            button.classList.remove('state-copied');
+            button.disabled = false;
+        }, 2000);
+    }
+
+    updateCaptureDirectoryDisplay(directoryHandle) {
+        const pathEl = document.getElementById('capture-directory-path');
+        if (pathEl) {
+            if (directoryHandle && directoryHandle.name) {
+                pathEl.textContent = `Current: ${directoryHandle.name}`;
+            } else {
+                pathEl.textContent = 'Current: Default Downloads';
+            }
+        }
     }
 }

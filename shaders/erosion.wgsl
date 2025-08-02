@@ -17,6 +17,7 @@ struct Uniforms {
     gridSize: u32,
     heightMultiplier: f32,
     velocityDamping: f32,
+    cellSize: f32,
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
@@ -87,6 +88,12 @@ fn main_flow(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(velocity_write, pos, vec4f(vel_out, 0.0, 0.0));
 }
 
+fn get_capacity(v_in: vec2f, w_in: f32) -> f32 {
+    // Calculate sediment capacity based on velocity, water depth, and slope.
+    // A minimum slope is used to ensure some capacity even in still water.
+    return max(u.minSlope, length(v_in)) * w_in * u.capacityFactor;
+}
+
 
 // --- Pass 3: Erosion ---
 @compute @workgroup_size(16, 16)
@@ -102,12 +109,12 @@ fn main_erosion(@builtin(global_invocation_id) id: vec3<u32>) {
     let v_in = textureLoad(velocity_read, tex_coords, 0).xy;
 
     // Calculate sediment capacity
-    let capacity = max(u.minSlope, length(v_in)) * w_in * u.capacityFactor;
+    let capacity = get_capacity(v_in, w_in);
 
     // ERODE ONLY
     // If water has capacity, erode terrain and add to sediment
     if (capacity > s_in) {
-        let amount_to_erode = (capacity - s_in) * u.solubility;
+        let amount_to_erode = (capacity - s_in) * u.depositionRate;
         // Don't erode more than the terrain height itself
         let final_erosion_amount = min(amount_to_erode, h_in);
 
@@ -170,7 +177,7 @@ fn main_deposition(@builtin(global_invocation_id) id: vec3<u32>) {
     let v_in = textureLoad(velocity_read, tex_coords, 0).xy;
 
     // Calculate sediment capacity
-    let capacity = max(u.minSlope, length(v_in)) * w_in * u.capacityFactor;
+    let capacity = get_capacity(v_in, w_in);
 
     // DEPOSIT ONLY
     // If sediment is over capacity, deposit it onto the terrain
